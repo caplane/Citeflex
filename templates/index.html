@@ -1,0 +1,325 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CiteFlex Pro</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body class="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100">
+  
+  <div class="flex flex-col items-center justify-start pt-16 px-4">
+    
+    <!-- Header -->
+    <div class="text-center mb-12">
+      <h1 class="text-4xl font-light tracking-tight text-slate-800 mb-2">
+        CiteFlex <span class="font-medium">Pro</span>
+      </h1>
+      <p class="text-slate-500 text-lg font-light">
+        The citation tool that just knows.
+      </p>
+    </div>
+
+    <!-- Main Card -->
+    <div 
+      id="mainCard"
+      class="w-full max-w-2xl bg-white rounded-2xl shadow-lg p-8 transition-all duration-300"
+      ondrop="handleDrop(event)"
+      ondragover="handleDragOver(event)"
+      ondragleave="handleDragLeave(event)"
+    >
+      
+      <!-- Single Citation Mode -->
+      <div id="singleMode">
+        <!-- Style Pills -->
+        <div class="flex justify-center gap-1 mb-6" id="stylePills">
+          <button onclick="setStyle('Chicago')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-800 text-white" data-style="Chicago">Chicago</button>
+          <button onclick="setStyle('APA')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="APA">APA</button>
+          <button onclick="setStyle('MLA')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="MLA">MLA</button>
+          <button onclick="setStyle('Bluebook')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="Bluebook">Bluebook</button>
+          <button onclick="setStyle('OSCOLA')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="OSCOLA">OSCOLA</button>
+        </div>
+
+        <!-- Input Area -->
+        <div class="relative mb-4">
+          <textarea
+            id="queryInput"
+            placeholder="Paste anything..."
+            rows="3"
+            class="w-full px-5 py-4 text-lg bg-slate-50 border-0 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-slate-300 placeholder:text-slate-400 text-slate-700"
+            onkeydown="handleKeyDown(event)"
+          ></textarea>
+        </div>
+
+        <!-- Cite Button -->
+        <button
+          id="citeBtn"
+          onclick="handleCite()"
+          class="w-full py-3.5 bg-slate-800 text-white rounded-xl text-lg font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center gap-2"
+        >
+          <span id="citeBtnText">Cite</span>
+          <div id="citeBtnSpinner" class="hidden w-5 h-5 border-2 border-white/30 border-t-white rounded-full spin"></div>
+        </button>
+
+        <!-- Subtle doc drop hint -->
+        <p class="text-center text-slate-400 text-sm mt-4">
+          or drop a Word document
+        </p>
+      </div>
+
+      <!-- Document Mode -->
+      <div id="docMode" class="hidden">
+        <div class="flex items-center justify-between mb-6">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+              <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </div>
+            <div>
+              <p id="docName" class="font-medium text-slate-800">document.docx</p>
+              <p class="text-sm text-slate-500">Microsoft Word</p>
+            </div>
+          </div>
+          <button 
+            onclick="resetDoc()"
+            class="text-slate-400 hover:text-slate-600 transition-colors"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Style Pills for Doc Mode -->
+        <div class="flex justify-center gap-1 mb-6" id="docStylePills">
+          <button onclick="setStyle('Chicago')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-800 text-white" data-style="Chicago">Chicago</button>
+          <button onclick="setStyle('APA')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="APA">APA</button>
+          <button onclick="setStyle('MLA')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="MLA">MLA</button>
+          <button onclick="setStyle('Bluebook')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="Bluebook">Bluebook</button>
+          <button onclick="setStyle('OSCOLA')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="OSCOLA">OSCOLA</button>
+        </div>
+
+        <!-- Doc Loading -->
+        <div id="docLoading" class="flex flex-col items-center py-12">
+          <div class="w-8 h-8 border-2 border-slate-300 border-t-slate-600 rounded-full spin mb-4"></div>
+          <p class="text-slate-500">Processing your document...</p>
+        </div>
+
+        <!-- Doc Results -->
+        <div id="docResults" class="hidden">
+          <div class="flex items-center justify-between mb-4">
+            <p class="text-green-600 font-medium flex items-center gap-2">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+              </svg>
+              <span id="docResultCount">12 citations formatted successfully</span>
+            </p>
+          </div>
+          <div id="docResultsList" class="space-y-3">
+            <!-- Results injected here -->
+          </div>
+          <button class="mt-4 w-full py-3 bg-slate-800 text-white rounded-xl font-medium hover:bg-slate-700 transition-colors">
+            Download Formatted Document
+          </button>
+        </div>
+      </div>
+
+      <!-- Single Citation Result -->
+      <div id="singleResult" class="hidden mt-6 pt-6 border-t border-slate-100">
+        <div class="relative">
+          <div id="citationText" class="text-lg text-slate-700 leading-relaxed pr-12"></div>
+          <button
+            onclick="handleCopy()"
+            class="absolute top-0 right-0 p-2 text-slate-400 hover:text-slate-600 transition-colors"
+            title="Copy to clipboard"
+          >
+            <svg id="copyIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            <svg id="checkIcon" class="hidden w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Footer tagline -->
+    <p class="mt-8 text-slate-400 text-sm">
+      Perfect citations. Zero effort.
+    </p>
+  </div>
+
+  <script>
+    let currentStyle = 'Chicago';
+    let currentCitation = '';
+
+    const citations = {
+      legal: {
+        'Chicago': '<em>Loving v. Virginia</em>, 388 U.S. 1 (1967).',
+        'APA': '<em>Loving v. Virginia</em>, 388 U.S. 1 (1967).',
+        'MLA': '<em>Loving v. Virginia</em>. 388 U.S. 1. Supreme Court of the United States, 1967.',
+        'Bluebook': '<em>Loving v. Virginia</em>, 388 U.S. 1 (1967).',
+        'OSCOLA': '<em>Loving v Virginia</em> 388 U.S. 1 (1967)'
+      },
+      interview: {
+        'Chicago': 'Philip Hirschkop, interview by author, Alexandria, VA, March 15, 2024.',
+        'APA': 'Hirschkop, P. (2024, March 15). [Personal interview]. Alexandria, VA.',
+        'MLA': 'Hirschkop, Philip. Personal interview. 15 Mar. 2024.',
+        'Bluebook': 'Interview with Philip Hirschkop, in Alexandria, Va. (Mar. 15, 2024).',
+        'OSCOLA': 'Interview with Philip Hirschkop (Alexandria, VA, 15 March 2024)'
+      },
+      newspaper: {
+        'Chicago': 'Jane Doe, "The Future of Mental Health Care," <em>The New York Times</em>, July 21, 2024.',
+        'APA': 'Doe, J. (2024, July 21). The future of mental health care. <em>The New York Times</em>. https://www.nytimes.com/...',
+        'MLA': 'Doe, Jane. "The Future of Mental Health Care." <em>The New York Times</em>, 21 July 2024.',
+        'Bluebook': 'Jane Doe, <em>The Future of Mental Health Care</em>, N.Y. Times, July 21, 2024.',
+        'OSCOLA': 'Jane Doe, \'The Future of Mental Health Care\' <em>The New York Times</em> (21 July 2024)'
+      },
+      journal: {
+        'Chicago': 'Eric Caplan, "The Osheroff Case Reconsidered," <em>Journal of the History of Medicine</em> 81, no. 2 (2026): 123–156.',
+        'APA': 'Caplan, E. (2026). The Osheroff case reconsidered. <em>Journal of the History of Medicine, 81</em>(2), 123–156.',
+        'MLA': 'Caplan, Eric. "The Osheroff Case Reconsidered." <em>Journal of the History of Medicine</em>, vol. 81, no. 2, 2026, pp. 123–156.',
+        'Bluebook': 'Eric Caplan, <em>The Osheroff Case Reconsidered</em>, 81 J. Hist. Med. 123 (2026).',
+        'OSCOLA': 'Eric Caplan, \'The Osheroff Case Reconsidered\' (2026) 81 Journal of the History of Medicine 123'
+      },
+      book: {
+        'Chicago': 'Eric Caplan, <em>When Healing Harms: The Doctor Who Put a Hospital on Trial</em> (Berkeley: University of California Press, 2026).',
+        'APA': 'Caplan, E. (2026). <em>When healing harms: The doctor who put a hospital on trial</em>. University of California Press.',
+        'MLA': 'Caplan, Eric. <em>When Healing Harms: The Doctor Who Put a Hospital on Trial</em>. University of California Press, 2026.',
+        'Bluebook': 'Eric Caplan, When Healing Harms: The Doctor Who Put a Hospital on Trial (2026).',
+        'OSCOLA': 'Eric Caplan, <em>When Healing Harms: The Doctor Who Put a Hospital on Trial</em> (University of California Press 2026)'
+      }
+    };
+
+    function detectType(input) {
+      const lower = input.toLowerCase();
+      if (lower.includes(' v ') || lower.includes(' v. ') || lower.includes('versus')) return 'legal';
+      if (lower.includes('interview') || lower.includes('oral history')) return 'interview';
+      if (lower.includes('http') || lower.includes('nytimes') || lower.includes('washingtonpost')) return 'newspaper';
+      if (lower.includes('10.') || lower.includes('journal') || lower.includes('vol')) return 'journal';
+      return 'book';
+    }
+
+    function setStyle(style) {
+      currentStyle = style;
+      document.querySelectorAll('.style-pill').forEach(pill => {
+        if (pill.dataset.style === style) {
+          pill.className = 'style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-800 text-white';
+        } else {
+          pill.className = 'style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200';
+        }
+      });
+      
+      // If there's already a result showing, update it
+      if (currentCitation) {
+        const type = detectType(document.getElementById('queryInput').value);
+        document.getElementById('citationText').innerHTML = citations[type][style];
+      }
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        handleCite();
+      }
+    }
+
+    function handleCite() {
+      const query = document.getElementById('queryInput').value.trim();
+      if (!query) return;
+
+      // Show loading
+      document.getElementById('citeBtnText').classList.add('hidden');
+      document.getElementById('citeBtnSpinner').classList.remove('hidden');
+      document.getElementById('citeBtn').disabled = true;
+      document.getElementById('singleResult').classList.add('hidden');
+
+      setTimeout(() => {
+        const type = detectType(query);
+        currentCitation = citations[type][currentStyle];
+        
+        document.getElementById('citationText').innerHTML = currentCitation;
+        document.getElementById('singleResult').classList.remove('hidden');
+        
+        // Reset button
+        document.getElementById('citeBtnText').classList.remove('hidden');
+        document.getElementById('citeBtnSpinner').classList.add('hidden');
+        document.getElementById('citeBtn').disabled = false;
+      }, 600);
+    }
+
+    function handleCopy() {
+      const temp = document.createElement('div');
+      temp.innerHTML = currentCitation;
+      navigator.clipboard.writeText(temp.textContent || temp.innerText);
+      
+      document.getElementById('copyIcon').classList.add('hidden');
+      document.getElementById('checkIcon').classList.remove('hidden');
+      
+      setTimeout(() => {
+        document.getElementById('copyIcon').classList.remove('hidden');
+        document.getElementById('checkIcon').classList.add('hidden');
+      }, 2000);
+    }
+
+    function handleDragOver(event) {
+      event.preventDefault();
+      document.getElementById('mainCard').classList.add('ring-2', 'ring-blue-400', 'ring-offset-4');
+    }
+
+    function handleDragLeave(event) {
+      document.getElementById('mainCard').classList.remove('ring-2', 'ring-blue-400', 'ring-offset-4');
+    }
+
+    function handleDrop(event) {
+      event.preventDefault();
+      document.getElementById('mainCard').classList.remove('ring-2', 'ring-blue-400', 'ring-offset-4');
+      
+      const file = event.dataTransfer.files[0];
+      if (file && file.name.endsWith('.docx')) {
+        document.getElementById('docName').textContent = file.name;
+        document.getElementById('singleMode').classList.add('hidden');
+        document.getElementById('singleResult').classList.add('hidden');
+        document.getElementById('docMode').classList.remove('hidden');
+        document.getElementById('docLoading').classList.remove('hidden');
+        document.getElementById('docResults').classList.add('hidden');
+
+        setTimeout(() => {
+          document.getElementById('docLoading').classList.add('hidden');
+          document.getElementById('docResults').classList.remove('hidden');
+          
+          const sampleResults = [
+            { original: 'Loving v. Virginia', formatted: '<em>Loving v. Virginia</em>, 388 U.S. 1 (1967).' },
+            { original: 'Brown v. Board', formatted: '<em>Brown v. Board of Education</em>, 347 U.S. 483 (1954).' },
+            { original: 'Miranda v. Arizona', formatted: '<em>Miranda v. Arizona</em>, 384 U.S. 436 (1966).' },
+          ];
+          
+          const listEl = document.getElementById('docResultsList');
+          listEl.innerHTML = sampleResults.map(item => `
+            <div class="bg-slate-50 rounded-lg p-3">
+              <p class="text-xs text-slate-400 mb-1">${item.original}</p>
+              <p class="text-slate-700">${item.formatted}</p>
+            </div>
+          `).join('');
+        }, 1500);
+      }
+    }
+
+    function resetDoc() {
+      document.getElementById('docMode').classList.add('hidden');
+      document.getElementById('singleMode').classList.remove('hidden');
+    }
+  </script>
+
+</body>
+</html>
