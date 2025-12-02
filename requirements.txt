@@ -1,0 +1,26 @@
+# CiteFlex Pro - Dependencies
+# Python 3.9+
+
+# Web Framework
+streamlit>=1.28.0
+
+# HTTP Requests
+requests>=2.31.0
+
+# Document Processing
+python-docx>=0.8.11
+lxml>=4.9.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# Fuzzy Matching (used in legal search)
+# difflib is stdlib, no install needed
+
+# Optional: Google AI (for Gemini router - Layer 2)
+# Uncomment to enable AI-powered classification
+# google-generativeai>=0.3.0
+
+# Optional: Rate limiting
+# ratelimit>=2.2.1
+
