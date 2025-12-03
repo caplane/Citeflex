@@ -1,396 +1,412 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CiteFlex Pro</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
-  <style>
-    body { font-family: 'Inter', sans-serif; }
-    .spin { animation: spin 1s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CiteFlex Pro - Interactive Workbench</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+        .serif { font-family: 'Merriweather', serif; }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 3px solid #2563eb;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .animate-fade-in { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Badge colors for different source types */
+        .badge-journal { background-color: #dcfce7; color: #166534; }
+        .badge-book { background-color: #dbeafe; color: #1e40af; }
+        .badge-legal { background-color: #fef3c7; color: #92400e; }
+        .badge-government { background-color: #f3e8ff; color: #7c3aed; }
+        .badge-newspaper { background-color: #fce7f3; color: #be185d; }
+        .badge-medical { background-color: #cffafe; color: #0e7490; }
+        .badge-interview { background-color: #fed7aa; color: #c2410c; }
+        .badge-default { background-color: #f3f4f6; color: #4b5563; }
+    </style>
 </head>
-<body class="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100">
-  
-  <div class="flex flex-col items-center justify-start pt-16 px-4">
-    
-    <!-- Header -->
-    <div class="text-center mb-12">
-      <h1 class="text-4xl font-light tracking-tight text-slate-800 mb-2">
-        CiteFlex <span class="font-medium">Pro</span>
-      </h1>
-      <p class="text-slate-500 text-lg font-light">
-        The citation tool that just knows.
-      </p>
-    </div>
+<body class="h-screen flex flex-col overflow-hidden">
 
-    <!-- Main Card -->
-    <div 
-      id="mainCard"
-      class="w-full max-w-2xl bg-white rounded-2xl shadow-lg p-8 transition-all duration-300"
-      ondrop="handleDrop(event)"
-      ondragover="handleDragOver(event)"
-      ondragleave="handleDragLeave(event)"
-    >
-      
-      <!-- Single Citation Mode -->
-      <div id="singleMode">
-        <!-- Style Pills -->
-        <div class="flex justify-center gap-1 mb-6 flex-wrap" id="stylePills">
-          <button onclick="setStyle('Chicago')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-800 text-white" data-style="Chicago">Chicago</button>
-          <button onclick="setStyle('APA')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="APA">APA</button>
-          <button onclick="setStyle('MLA')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="MLA">MLA</button>
-          <button onclick="setStyle('Bluebook')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="Bluebook">Bluebook</button>
-          <button onclick="setStyle('OSCOLA')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="OSCOLA">OSCOLA</button>
-        </div>
-
-        <!-- Input Area -->
-        <div class="relative mb-4">
-          <textarea
-            id="queryInput"
-            placeholder="Paste anything..."
-            rows="3"
-            class="w-full px-5 py-4 text-lg bg-slate-50 border-0 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-slate-300 placeholder:text-slate-400 text-slate-700"
-            onkeydown="handleKeyDown(event)"
-          ></textarea>
-        </div>
-
-        <!-- Cite Button -->
-        <button
-          id="citeBtn"
-          onclick="handleCite()"
-          class="w-full py-3.5 bg-slate-800 text-white rounded-xl text-lg font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center gap-2"
-        >
-          <span id="citeBtnText">Cite</span>
-          <div id="citeBtnSpinner" class="hidden w-5 h-5 border-2 border-white/30 border-t-white rounded-full spin"></div>
-        </button>
-
-        <!-- Subtle doc drop hint -->
-        <p class="text-center text-slate-400 text-sm mt-4">
-          or drop a Word document
-        </p>
-      </div>
-
-      <!-- Document Mode -->
-      <div id="docMode" class="hidden">
-        <div class="flex items-center justify-between mb-6">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-              <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
+    <!-- HEADER -->
+    <header class="bg-white border-b border-gray-200 shadow-sm z-20 px-6 h-16 flex items-center justify-between">
+        <div class="flex items-center gap-4">
+            <div class="bg-blue-600 text-white w-10 h-10 flex items-center justify-center rounded-lg shadow-sm">
+                <i class="fas fa-quote-left text-lg"></i>
             </div>
             <div>
-              <p id="docName" class="font-medium text-slate-800">document.docx</p>
-              <p class="text-sm text-slate-500">Microsoft Word</p>
+                <h1 class="text-xl font-bold text-gray-900 tracking-tight">CiteFlex <span class="text-blue-600">Pro</span></h1>
+                <p class="text-xs text-gray-500 font-medium">Modular Citation Engine v2.0</p>
             </div>
-          </div>
-          <button 
-            onclick="resetDoc()"
-            class="text-slate-400 hover:text-slate-600 transition-colors"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
         </div>
-
-        <!-- Style Pills for Doc Mode -->
-        <div class="flex justify-center gap-1 mb-6 flex-wrap" id="docStylePills">
-          <button onclick="setStyle('Chicago')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-800 text-white" data-style="Chicago">Chicago</button>
-          <button onclick="setStyle('APA')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="APA">APA</button>
-          <button onclick="setStyle('MLA')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="MLA">MLA</button>
-          <button onclick="setStyle('Bluebook')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="Bluebook">Bluebook</button>
-          <button onclick="setStyle('OSCOLA')" class="style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200" data-style="OSCOLA">OSCOLA</button>
+        
+        <div class="flex items-center gap-3">
+            <button onclick="resetProject()" class="text-red-600 hover:text-red-700 font-medium text-sm px-3 py-2 rounded-lg hover:bg-red-50 transition-colors">
+                <i class="fas fa-trash-alt mr-1"></i> Reset Project
+            </button>
         </div>
+    </header>
 
-        <!-- Doc Loading -->
-        <div id="docLoading" class="flex flex-col items-center py-12">
-          <div class="w-8 h-8 border-2 border-slate-300 border-t-slate-600 rounded-full spin mb-4"></div>
-          <p class="text-slate-500">Processing your document...</p>
-        </div>
-
-        <!-- Doc Results -->
-        <div id="docResults" class="hidden">
-          <div class="flex items-center justify-between mb-4">
-            <p class="text-green-600 font-medium flex items-center gap-2">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-              </svg>
-              <span id="docResultCount">Citations formatted successfully</span>
-            </p>
-          </div>
-          <div id="docResultsList" class="space-y-3">
-            <!-- Results injected here -->
-          </div>
-          <button id="downloadBtn" class="mt-4 w-full py-3 bg-slate-800 text-white rounded-xl font-medium hover:bg-slate-700 transition-colors">
-            Download Formatted Document
-          </button>
-        </div>
-      </div>
-
-      <!-- Single Citation Result -->
-      <div id="singleResult" class="hidden mt-6 pt-6 border-t border-slate-100">
-        <div class="relative">
-          <div id="citationText" class="text-lg text-slate-700 leading-relaxed pr-12"></div>
-          <button
-            onclick="handleCopy()"
-            class="absolute top-0 right-0 p-2 text-slate-400 hover:text-slate-600 transition-colors"
-            title="Copy to clipboard"
-          >
-            <svg id="copyIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-            <svg id="checkIcon" class="hidden w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      <!-- Error Message -->
-      <div id="errorMessage" class="hidden mt-6 pt-6 border-t border-slate-100">
-        <div class="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
-          <p id="errorText"></p>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- Footer tagline -->
-    <p class="mt-8 text-slate-400 text-sm mb-8">
-      Perfect citations. Zero effort.
-    </p>
-  </div>
-
-  <script>
-    let currentStyle = 'Chicago';
-    let currentCitation = '';
-    let currentQuery = '';
-    let uploadedFile = null;  // Store the uploaded file for download
-
-    function setStyle(style) {
-      currentStyle = style;
-      document.querySelectorAll('.style-pill').forEach(pill => {
-        if (pill.dataset.style === style) {
-          pill.className = 'style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-800 text-white';
-        } else {
-          pill.className = 'style-pill px-4 py-1.5 rounded-full text-sm transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200';
-        }
-      });
-      
-      // If there's already a query, re-cite with new style
-      if (currentQuery && document.getElementById('singleResult').classList.contains('hidden') === false) {
-        handleCite();
-      }
-    }
-
-    function handleKeyDown(event) {
-      if (event.key === 'Enter' && !event.shiftKey) {
-        event.preventDefault();
-        handleCite();
-      }
-    }
-
-    async function handleCite() {
-      const query = document.getElementById('queryInput').value.trim();
-      if (!query) return;
-
-      currentQuery = query;
-
-      // Show loading
-      document.getElementById('citeBtnText').classList.add('hidden');
-      document.getElementById('citeBtnSpinner').classList.remove('hidden');
-      document.getElementById('citeBtn').disabled = true;
-      document.getElementById('singleResult').classList.add('hidden');
-      document.getElementById('errorMessage').classList.add('hidden');
-
-      try {
-        const response = await fetch('/api/cite', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            query: query,
-            style: currentStyle
-          })
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-          currentCitation = data.citation;
-          document.getElementById('citationText').innerHTML = currentCitation;
-          document.getElementById('singleResult').classList.remove('hidden');
-        } else {
-          document.getElementById('errorText').textContent = data.error || 'Could not generate citation';
-          document.getElementById('errorMessage').classList.remove('hidden');
-        }
-      } catch (error) {
-        document.getElementById('errorText').textContent = 'Connection error. Please try again.';
-        document.getElementById('errorMessage').classList.remove('hidden');
-      }
-
-      // Reset button
-      document.getElementById('citeBtnText').classList.remove('hidden');
-      document.getElementById('citeBtnSpinner').classList.add('hidden');
-      document.getElementById('citeBtn').disabled = false;
-    }
-
-    function handleCopy() {
-      const temp = document.createElement('div');
-      temp.innerHTML = currentCitation;
-      navigator.clipboard.writeText(temp.textContent || temp.innerText);
-      
-      document.getElementById('copyIcon').classList.add('hidden');
-      document.getElementById('checkIcon').classList.remove('hidden');
-      
-      setTimeout(() => {
-        document.getElementById('copyIcon').classList.remove('hidden');
-        document.getElementById('checkIcon').classList.add('hidden');
-      }, 2000);
-    }
-
-    function handleDragOver(event) {
-      event.preventDefault();
-      document.getElementById('mainCard').classList.add('ring-2', 'ring-blue-400', 'ring-offset-4');
-    }
-
-    function handleDragLeave(event) {
-      document.getElementById('mainCard').classList.remove('ring-2', 'ring-blue-400', 'ring-offset-4');
-    }
-
-    async function handleDrop(event) {
-      event.preventDefault();
-      document.getElementById('mainCard').classList.remove('ring-2', 'ring-blue-400', 'ring-offset-4');
-      
-      const file = event.dataTransfer.files[0];
-      if (file && file.name.endsWith('.docx')) {
-        uploadedFile = file;  // Store for download
-        document.getElementById('docName').textContent = file.name;
-        document.getElementById('singleMode').classList.add('hidden');
-        document.getElementById('singleResult').classList.add('hidden');
-        document.getElementById('errorMessage').classList.add('hidden');
-        document.getElementById('docMode').classList.remove('hidden');
-        document.getElementById('docLoading').classList.remove('hidden');
-        document.getElementById('docResults').classList.add('hidden');
-
-        try {
-          const formData = new FormData();
-          formData.append('file', file);
-          formData.append('style', currentStyle);
-
-          const response = await fetch('/api/cite/document', {
-            method: 'POST',
-            body: formData
-          });
-
-          const data = await response.json();
-
-          document.getElementById('docLoading').classList.add('hidden');
-          document.getElementById('docResults').classList.remove('hidden');
-          
-          if (data.success && data.citations && data.citations.length > 0) {
-            document.getElementById('docResultCount').textContent = `${data.count} of ${data.total} citations formatted`;
+    <!-- MAIN CONTENT -->
+    <main class="flex-1 flex overflow-hidden">
+        
+        <!-- LEFT SIDEBAR: Citations List -->
+        <aside class="w-1/3 bg-white border-r border-gray-200 flex flex-col z-10">
             
-            const listEl = document.getElementById('docResultsList');
-            listEl.innerHTML = data.citations.map(item => `
-              <div class="bg-slate-50 rounded-lg p-3">
-                <p class="text-xs text-slate-400 mb-1">${escapeHtml(item.original)}</p>
-                <p class="text-slate-700">${item.formatted}</p>
-              </div>
-            `).join('');
-          } else if (data.success) {
-            document.getElementById('docResultCount').textContent = data.message || 'No citations found in document';
-            document.getElementById('docResultsList').innerHTML = '';
-          } else {
-            document.getElementById('docResultCount').textContent = 'Error processing document';
-            document.getElementById('docResultsList').innerHTML = `
-              <div class="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
-                <p>${escapeHtml(data.error || 'Unknown error')}</p>
-              </div>
-            `;
-          }
-        } catch (error) {
-          document.getElementById('docLoading').classList.add('hidden');
-          document.getElementById('docResults').classList.remove('hidden');
-          document.getElementById('docResultCount').textContent = 'Error processing document';
-          document.getElementById('docResultsList').innerHTML = `
-            <div class="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
-              <p>${escapeHtml(error.message || 'Connection error')}</p>
+            <!-- Upload Area -->
+            <div class="p-6 border-b border-gray-100 bg-gray-50">
+                <input type="file" id="file-input" class="hidden" accept=".docx">
+                <button onclick="document.getElementById('file-input').click()" class="w-full border-2 border-dashed border-gray-300 rounded-xl p-6 text-center hover:border-blue-500 hover:bg-blue-50 transition-all cursor-pointer group flex flex-col items-center gap-2">
+                    <i class="fas fa-cloud-upload-alt text-2xl text-gray-400 group-hover:text-blue-500 transition-colors"></i>
+                    <span class="text-sm font-medium text-gray-600 group-hover:text-blue-700">Click to Upload Document (.docx)</span>
+                </button>
+                <div id="upload-loading" class="hidden mt-3 flex items-center justify-center gap-2 text-xs text-gray-500">
+                    <div class="loader w-4 h-4"></div> Extracting citations...
+                </div>
+                <div id="download-area" class="hidden mt-4">
+                    <a href="/download" class="block w-full bg-gray-900 hover:bg-gray-800 text-white text-center font-medium py-2.5 px-4 rounded-lg transition-colors text-sm">
+                        <i class="fas fa-file-export mr-2"></i> Download Result
+                    </a>
+                </div>
             </div>
-          `;
-        }
-      }
-    }
 
-    async function handleDownload() {
-      if (!uploadedFile) {
-        alert('No file to download');
-        return;
-      }
+            <!-- Citations Count -->
+            <div class="px-6 py-3 bg-white border-b border-gray-100 flex justify-between items-center">
+                <span class="text-xs font-bold text-gray-400 uppercase tracking-wider">Citations Found</span>
+                <span id="citation-count" class="text-xs bg-gray-100 px-2 py-1 rounded text-gray-600">0</span>
+            </div>
 
-      const btn = document.getElementById('downloadBtn');
-      const originalText = btn.textContent;
-      btn.textContent = 'Preparing download...';
-      btn.disabled = true;
+            <!-- Citations List -->
+            <div id="citation-list" class="flex-1 overflow-y-auto p-4 space-y-2">
+                <div id="list-empty" class="text-center py-10 text-gray-400 text-sm">
+                    Upload a file to see citations here.
+                </div>
+            </div>
+        </aside>
 
-      try {
-        const formData = new FormData();
-        formData.append('file', uploadedFile);
-        formData.append('style', currentStyle);
+        <!-- RIGHT PANEL: Editor -->
+        <section id="editor-panel" class="flex-1 bg-gray-50 p-8 flex flex-col overflow-y-auto">
+            
+            <!-- Empty State -->
+            <div id="editor-empty" class="flex flex-col items-center justify-center h-full text-gray-400">
+                <i class="fas fa-mouse-pointer text-4xl mb-4 opacity-20"></i>
+                <p class="text-sm font-medium">Select a citation from the left to resolve.</p>
+            </div>
 
-        const response = await fetch('/api/cite/document/download', {
-          method: 'POST',
-          body: formData
+            <!-- Active Editor -->
+            <div id="editor-active" class="hidden max-w-3xl mx-auto w-full space-y-6 animate-fade-in">
+                
+                <!-- Original Text Card -->
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="text-xs font-bold text-gray-400 uppercase">Original Text</h3>
+                        <span id="active-id" class="text-xs font-mono text-gray-400">ID: #</span>
+                    </div>
+                    <div id="active-original" class="text-gray-800 font-serif italic p-4 bg-gray-50 rounded-lg border border-gray-100 leading-relaxed"></div>
+                </div>
+
+                <!-- Candidates Section -->
+                <div id="candidates-section">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="text-xs font-bold text-gray-400 uppercase">Proposed Resolutions</h3>
+                        
+                        <div class="flex items-center gap-2">
+                            <select id="style-selector" onchange="searchCandidates()" class="text-xs border border-gray-300 rounded bg-white text-gray-600 h-7 px-2 focus:border-blue-500 outline-none cursor-pointer">
+                                <option value="chicago">Chicago (17th)</option>
+                                <option value="bluebook">Bluebook (Law)</option>
+                                <option value="oscola">OSCOLA (UK)</option>
+                                <option value="apa">APA (Psych)</option>
+                                <option value="mla">MLA (Arts)</option>
+                            </select>
+                            
+                            <button onclick="searchCandidates()" class="text-xs text-blue-600 font-medium hover:bg-blue-50 p-1.5 rounded transition-colors" title="Refresh search">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="candidates-list" class="space-y-3">
+                        <!-- Candidates rendered here -->
+                    </div>
+                </div>
+
+                <!-- Final Editor Card -->
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-blue-200 ring-1 ring-blue-50">
+                    <h3 class="text-xs font-bold text-blue-600 uppercase mb-3 flex items-center gap-2">
+                        <i class="fas fa-pen-nib"></i> Final Citation Editor
+                    </h3>
+                    <textarea id="final-edit-area" class="w-full p-4 border border-gray-300 rounded-lg font-serif text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-y min-h-[100px]" placeholder="Select a candidate above or type manually..."></textarea>
+                    
+                    <div class="flex gap-3 mt-4 pt-4 border-t border-gray-100">
+                        <button onclick="commitChange()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition-colors shadow-sm flex items-center justify-center gap-2">
+                            <i class="fas fa-check"></i> Accept & Save
+                        </button>
+                        <button onclick="appendMode()" class="px-5 py-2.5 bg-white text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors border border-gray-200 shadow-sm flex items-center gap-2" title="Add another source to this note">
+                            <i class="fas fa-plus text-gray-400"></i> Append
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+    </main>
+
+    <script>
+        let activeNoteId = null;
+        let activeNoteType = null;
+        let currentCitations = [];
+
+        // =================================================================
+        // 1. UPLOAD LOGIC
+        // =================================================================
+        document.getElementById('file-input').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const loading = document.getElementById('upload-loading');
+            loading.classList.remove('hidden');
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                const res = await fetch('/upload', { method: 'POST', body: formData });
+                const data = await res.json();
+                
+                if (data.success) {
+                    currentCitations = data.endnotes;
+                    document.getElementById('citation-count').innerText = currentCitations.length;
+                    document.getElementById('download-area').classList.remove('hidden');
+                    renderList();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Upload failed. Please try again.');
+            } finally {
+                loading.classList.add('hidden');
+            }
         });
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || 'Download failed');
+        function renderList() {
+            const list = document.getElementById('citation-list');
+            list.innerHTML = '';
+            
+            currentCitations.forEach(note => {
+                const div = document.createElement('div');
+                div.id = `list-item-${note.id}`;
+                div.className = 'p-3 bg-white border border-gray-200 rounded-lg cursor-pointer hover:border-blue-400 hover:shadow-sm transition-all text-sm text-gray-600 truncate font-serif';
+                
+                // Add footnote indicator if applicable
+                const prefix = note.type === 'footnote' ? '<span class="text-xs text-purple-600 mr-1">[FN]</span>' : '';
+                div.innerHTML = prefix + escapeHtml(note.text);
+                
+                div.onclick = () => loadEditor(note);
+                list.appendChild(div);
+            });
         }
 
-        // Get the blob and trigger download
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'formatted_' + uploadedFile.name;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
+        // =================================================================
+        // 2. EDITOR LOGIC
+        // =================================================================
+        function loadEditor(note) {
+            activeNoteId = note.id;
+            activeNoteType = note.type || 'endnote';
+            
+            document.getElementById('editor-empty').classList.add('hidden');
+            document.getElementById('editor-active').classList.remove('hidden');
+            
+            const typeLabel = note.type === 'footnote' ? 'Footnote' : 'Endnote';
+            document.getElementById('active-id').innerText = `${typeLabel} #${note.id.replace('fn_', '')}`;
+            document.getElementById('active-original').innerText = note.text;
+            document.getElementById('final-edit-area').value = note.text;
+            
+            // Show loading in candidates
+            document.getElementById('candidates-list').innerHTML = `
+                <div class="flex justify-center py-8">
+                    <div class="loader"></div>
+                </div>
+            `;
+            
+            searchCandidates(note.text);
+        }
 
-      } catch (error) {
-        alert('Download failed: ' + error.message);
-      }
+        async function searchCandidates(text = null) {
+            if (!text) {
+                const original = document.getElementById('active-original');
+                if (original) text = original.innerText;
+            }
+            if (!text) return;
 
-      btn.textContent = originalText;
-      btn.disabled = false;
-    }
+            const style = document.getElementById('style-selector').value;
 
-    function resetDoc() {
-      uploadedFile = null;
-      document.getElementById('docMode').classList.add('hidden');
-      document.getElementById('singleMode').classList.remove('hidden');
-    }
+            try {
+                const res = await fetch('/search', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ text: text, style: style })
+                });
+                const data = await res.json();
+                renderCandidates(data.results);
+            } catch (err) {
+                console.error(err);
+                document.getElementById('candidates-list').innerHTML = `
+                    <div class="text-red-500 text-sm text-center py-4">
+                        <i class="fas fa-exclamation-circle mr-2"></i>Search failed. Try again.
+                    </div>
+                `;
+            }
+        }
 
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
+        function renderCandidates(results) {
+            const list = document.getElementById('candidates-list');
+            list.innerHTML = '';
 
-    // Wire up download button
-    document.addEventListener('DOMContentLoaded', function() {
-      document.getElementById('downloadBtn').addEventListener('click', handleDownload);
-    });
-  </script>
+            if (!results || results.length === 0) {
+                list.innerHTML = `
+                    <div class="text-gray-400 text-sm text-center italic py-4">
+                        No matches found. Type citation manually below.
+                    </div>
+                `;
+                return;
+            }
 
+            results.forEach((cand, index) => {
+                const item = document.createElement('div');
+                item.className = 'bg-white p-4 rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50/30 cursor-pointer group transition-all relative';
+                
+                // Clicking selects this candidate
+                item.onclick = () => {
+                    document.getElementById('final-edit-area').value = cand.formatted;
+                };
+                
+                // Get badge class based on type
+                const badgeClass = getBadgeClass(cand.type);
+                
+                item.innerHTML = `
+                    <div class="flex justify-between items-start mb-2">
+                        <div class="flex items-center gap-2">
+                            <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded ${badgeClass}">${escapeHtml(cand.source)}</span>
+                            ${cand.confidence === 'high' ? '<i class="fas fa-star text-amber-400 text-xs" title="High Confidence"></i>' : ''}
+                        </div>
+                        <button class="text-xs font-medium text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity bg-white px-2 py-1 rounded border border-blue-100 shadow-sm">
+                            Use This <i class="fas fa-arrow-down ml-1"></i>
+                        </button>
+                    </div>
+                    <p class="text-sm font-serif text-gray-800 leading-relaxed">${cand.formatted}</p>
+                `;
+                list.appendChild(item);
+            });
+        }
+
+        function getBadgeClass(type) {
+            const classes = {
+                'journal': 'badge-journal',
+                'book': 'badge-book',
+                'legal': 'badge-legal',
+                'government': 'badge-government',
+                'newspaper': 'badge-newspaper',
+                'medical': 'badge-medical',
+                'interview': 'badge-interview',
+            };
+            return classes[type] || 'badge-default';
+        }
+
+        // =================================================================
+        // 3. COMMIT CHANGES
+        // =================================================================
+        async function commitChange() {
+            if (!activeNoteId) return;
+            
+            const newText = document.getElementById('final-edit-area').value;
+            const btn = document.querySelector('button[onclick="commitChange()"]');
+            const originalBtnHtml = btn.innerHTML;
+            
+            btn.innerHTML = `<div class="loader w-4 h-4 border-white border-t-transparent"></div>`;
+            btn.disabled = true;
+            
+            try {
+                const res = await fetch('/update', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ id: activeNoteId, html: newText })
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    // Update the list item to show it's been resolved
+                    const listItem = document.getElementById(`list-item-${activeNoteId}`);
+                    if (listItem) {
+                        listItem.classList.remove('bg-white', 'text-gray-600', 'border-gray-200');
+                        listItem.classList.add('bg-green-50', 'text-green-800', 'border-green-200');
+                        
+                        const prefix = activeNoteType === 'footnote' ? '<span class="text-xs text-purple-600 mr-1">[FN]</span>' : '';
+                        listItem.innerHTML = `<i class="fas fa-check text-xs mr-2 text-green-600"></i>${prefix}${escapeHtml(newText.substring(0, 100))}${newText.length > 100 ? '...' : ''}`;
+                    }
+                    
+                    btn.innerHTML = `<i class="fas fa-check"></i> Saved!`;
+                    setTimeout(() => {
+                        btn.innerHTML = originalBtnHtml;
+                        btn.disabled = false;
+                    }, 2000);
+                } else {
+                    alert('Failed to save: ' + (data.error || 'Unknown error'));
+                    btn.innerHTML = originalBtnHtml;
+                    btn.disabled = false;
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Failed to save. Please try again.');
+                btn.innerHTML = originalBtnHtml;
+                btn.disabled = false;
+            }
+        }
+        
+        function appendMode() {
+            const area = document.getElementById('final-edit-area');
+            area.value = area.value.trim() + "; ";
+            area.focus();
+        }
+
+        // =================================================================
+        // 4. RESET PROJECT
+        // =================================================================
+        async function resetProject() {
+            if (!confirm('Reset project? All unsaved changes will be lost.')) return;
+            
+            try {
+                await fetch('/reset', { method: 'POST' });
+            } catch (e) {
+                // Ignore errors
+            }
+            
+            window.location.reload();
+        }
+
+        // =================================================================
+        // UTILITIES
+        // =================================================================
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
 </body>
 </html>
