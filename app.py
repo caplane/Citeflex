@@ -199,8 +199,8 @@ def search():
         
         print(f"[Search] Query: '{text[:50]}...' → Type: {citation_type.name} ({detection.confidence:.2f})")
         
-        # Search using router's TYPE-AWARE search
-        candidates = search_all_sources(text, citation_type, max_results=5)
+        # Search all sources (DOI fast-path handled inside router)
+        candidates = search_all_sources(text, max_results=5)
         
         # Get formatter and session data
         formatter = get_formatter(full_style)
