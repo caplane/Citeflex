@@ -170,6 +170,9 @@
         let activeNoteId = null;
         let activeNoteType = null;
         let currentCitations = [];
+        let selectedMetadata = null;  // Track selected candidate's metadata
+        let resolvedNotes = {};       // { inputText: { short_form } }
+        let previousInput = null;     // Last saved note's input text
 
         // =================================================================
         // 1. UPLOAD LOGIC
@@ -228,6 +231,7 @@
         function loadEditor(note) {
             activeNoteId = note.id;
             activeNoteType = note.type || 'endnote';
+            selectedMetadata = null;  // Reset metadata for new note
             
             document.getElementById('editor-empty').classList.add('hidden');
             document.getElementById('editor-active').classList.remove('hidden');
@@ -236,6 +240,31 @@
             document.getElementById('active-id').innerText = `${typeLabel} #${note.id.replace('fn_', '')}`;
             document.getElementById('active-original').innerText = note.text;
             document.getElementById('final-edit-area').value = note.text;
+            
+            // Check for ibid (consecutive identical input)
+            if (previousInput && note.text === previousInput) {
+                document.getElementById('final-edit-area').value = 'ibid.';
+                document.getElementById('candidates-list').innerHTML = `
+                    <div class="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
+                        <i class="fas fa-copy text-green-600 mr-2"></i>
+                        <span class="text-green-800 font-medium">Consecutive citation — Ibid. auto-filled</span>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Check for short form (previously cited, not consecutive)
+            if (resolvedNotes[note.text]) {
+                const shortForm = resolvedNotes[note.text].short_form;
+                document.getElementById('final-edit-area').value = shortForm;
+                document.getElementById('candidates-list').innerHTML = `
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
+                        <i class="fas fa-history text-blue-600 mr-2"></i>
+                        <span class="text-blue-800 font-medium">Previously cited — Short form auto-filled</span>
+                    </div>
+                `;
+                return;
+            }
             
             // Show loading in candidates
             document.getElementById('candidates-list').innerHTML = `
@@ -291,9 +320,10 @@
                 const item = document.createElement('div');
                 item.className = 'bg-white p-4 rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50/30 cursor-pointer group transition-all relative';
                 
-                // Clicking selects this candidate
+                // FIX 3: Store metadata when candidate is clicked
                 item.onclick = () => {
                     document.getElementById('final-edit-area').value = cand.formatted;
+                    selectedMetadata = cand.metadata || null;
                 };
                 
                 // Get badge class based on type
@@ -335,6 +365,8 @@
             if (!activeNoteId) return;
             
             const newText = document.getElementById('final-edit-area').value;
+            const originalText = document.getElementById('active-original').innerText;
+            const style = document.getElementById('style-selector').value;
             const btn = document.querySelector('button[onclick="commitChange()"]');
             const originalBtnHtml = btn.innerHTML;
             
@@ -345,11 +377,22 @@
                 const res = await fetch('/update', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ id: activeNoteId, html: newText })
+                    body: JSON.stringify({ 
+                        id: activeNoteId, 
+                        html: newText, 
+                        metadata: selectedMetadata,
+                        style: style
+                    })
                 });
                 const data = await res.json();
                 
                 if (data.success) {
+                    // Store for ibid/short form tracking (only if not already ibid/short)
+                    if (selectedMetadata && data.short_form) {
+                        resolvedNotes[originalText] = { short_form: data.short_form };
+                    }
+                    previousInput = originalText;
+                    
                     // Update the list item to show it's been resolved
                     const listItem = document.getElementById(`list-item-${activeNoteId}`);
                     if (listItem) {
