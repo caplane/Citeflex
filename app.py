@@ -2,25 +2,22 @@
 CiteFlex Pro - Flask Application
 Serves the web UI and provides citation API endpoints.
 
-This version matches the frontend's expected endpoints:
-- POST /upload - Upload document, extract endnotes/footnotes
-- POST /search - Search for citation candidates (type-aware)
-- POST /update - Update a specific note with new text
-- POST /reset - Clear session state
-- GET /download - Download the modified document
-
-Also maintains the /api/* endpoints for programmatic access.
+This version uses the working WordDocumentProcessor and LinkActivator classes
+from the monolithic version for reliable document handling.
 """
 
 import os
 import re
 import io
 import uuid
+import html
 import zipfile
+import tempfile
+import shutil
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file, session
 from werkzeug.utils import secure_filename
-from xml.etree import ElementTree as ET
+import xml.etree.ElementTree as ET
 
 # Import CiteFlex components
 from models import CitationMetadata, CitationType, CitationStyle
@@ -33,10 +30,10 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'citeflex-dev-key-change-in-production')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
+
 # =============================================================================
 # IN-MEMORY SESSION STORAGE
 # =============================================================================
-# For production, consider using Redis or database storage
 
 _sessions = {}
 
@@ -48,10 +45,10 @@ def get_session_data():
         session_id = str(uuid.uuid4())
         session['session_id'] = session_id
         _sessions[session_id] = {
-            'doc_bytes': None,
+            'doc_processor': None,
             'endnotes': [],
             'footnotes': [],
-            'updates': {},  # id -> new_html
+            'updates': {},
             'filename': None,
         }
     return _sessions[session_id]
@@ -61,261 +58,431 @@ def clear_session_data():
     """Clear current session data."""
     session_id = session.get('session_id')
     if session_id and session_id in _sessions:
+        # Cleanup doc processor temp files
+        if _sessions[session_id].get('doc_processor'):
+            try:
+                _sessions[session_id]['doc_processor'].cleanup()
+            except:
+                pass
         del _sessions[session_id]
     session.pop('session_id', None)
 
 
 # =============================================================================
-# WORD DOCUMENT PROCESSING (XML approach with endnoteRef fix)
+# LINK ACTIVATOR (from monolithic version)
 # =============================================================================
 
-# XML namespaces for docx
-NAMESPACES = {
-    'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
-    'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
-    'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
-}
-
-# Register namespaces to preserve them on output
-for prefix, uri in NAMESPACES.items():
-    ET.register_namespace(prefix, uri)
-ET.register_namespace('', NAMESPACES['w'])
-
-
-def extract_notes_from_docx(file_bytes):
+class LinkActivator:
     """
-    Extract endnotes and footnotes from a .docx file.
-    
-    Returns:
-        tuple: (endnotes_list, footnotes_list)
-        Each list contains dicts with 'id', 'text', 'type'
+    Post-processing module that converts plain text URLs in Word documents
+    into clickable hyperlinks. Processes document.xml, endnotes.xml, and footnotes.xml.
     """
-    endnotes = []
-    footnotes = []
     
-    try:
-        with zipfile.ZipFile(io.BytesIO(file_bytes), 'r') as zf:
-            # Extract endnotes
-            if 'word/endnotes.xml' in zf.namelist():
-                endnotes_xml = zf.read('word/endnotes.xml')
-                endnotes = _parse_notes_xml(endnotes_xml, 'endnote')
-            
-            # Extract footnotes
-            if 'word/footnotes.xml' in zf.namelist():
-                footnotes_xml = zf.read('word/footnotes.xml')
-                footnotes = _parse_notes_xml(footnotes_xml, 'footnote')
-    
-    except Exception as e:
-        print(f"[Extract] Error reading document: {e}")
-        raise
-    
-    return endnotes, footnotes
-
-
-def _parse_notes_xml(xml_bytes, note_type):
-    """Parse endnotes.xml or footnotes.xml and extract text."""
-    notes = []
-    
-    try:
-        root = ET.fromstring(xml_bytes)
+    @staticmethod
+    def process(docx_path, output_path=None):
+        """
+        Process a .docx file to make all URLs clickable.
+        """
+        if output_path is None:
+            output_path = docx_path
         
-        # Find all endnote or footnote elements
-        tag = f'{{{NAMESPACES["w"]}}}{note_type}'
-        for note_elem in root.findall(f'.//{tag}'):
-            note_id = note_elem.get(f'{{{NAMESPACES["w"]}}}id')
+        temp_dir = tempfile.mkdtemp()
+        
+        try:
+            with zipfile.ZipFile(docx_path, 'r') as zip_ref:
+                zip_ref.extractall(temp_dir)
+
+            target_files = ['word/document.xml', 'word/endnotes.xml', 'word/footnotes.xml']
             
-            # Skip separator notes (id 0 and -1)
-            if note_id in ['0', '-1']:
-                continue
+            for xml_file in target_files:
+                full_path = os.path.join(temp_dir, xml_file)
+                if not os.path.exists(full_path):
+                    continue
+
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                def linkify_text_node(match):
+                    text_content = match.group(2) 
+                    url_match = re.search(r'(https?://[^\s<>"]+)', text_content)
+                    
+                    if url_match:
+                        url = url_match.group(1)
+                        clean_url = url.rstrip('.,;)')
+                        trailing_punct = url[len(clean_url):]
+                        safe_url = html.escape(clean_url)
+                        
+                        parts = text_content.split(url, 1)
+                        pre = parts[0]
+                        post = parts[1] if len(parts) > 1 else ""
+                        
+                        fld_begin = r'<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+                        instr = f'<w:r><w:instrText xml:space="preserve"> HYPERLINK "{safe_url}" </w:instrText></w:r>'
+                        fld_sep = r'<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+                        display = (
+                            f'<w:r>'
+                            f'<w:rPr><w:color w:val="0000FF"/><w:u w:val="single"/></w:rPr>'
+                            f'<w:t>{clean_url}</w:t>'
+                            f'</w:r>'
+                        )
+                        fld_end = r'<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+                        
+                        full_field_xml = f"{fld_begin}{instr}{fld_sep}{display}{fld_end}"
+                        new_xml = f"{pre}</w:t></w:r>{full_field_xml}<w:r><w:t>{trailing_punct}{post}"
+                        return f"{match.group(1)}{new_xml}{match.group(3)}"
+                        
+                    return match.group(0)
+
+                run_pattern = r'(<w:r[^\>]*>)(.*?<w:t[^>]*>.*?<\/w:t>.*?)(<\/w:r>)'
+                
+                def process_run(run_match):
+                    run_inner = run_match.group(2)
+                    if 'HYPERLINK' in run_inner or 'w:instrText' in run_inner:
+                        return run_match.group(0)
+                    return re.sub(r'(<w:t[^>]*>)(.*?)(</w:t>)', linkify_text_node, run_match.group(0))
+
+                new_content = re.sub(run_pattern, process_run, content, flags=re.DOTALL)
+                
+                if new_content != content:
+                    with open(full_path, 'w', encoding='utf-8') as f:
+                        f.write(new_content)
+
+            with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for root, dirs, files in os.walk(temp_dir):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, temp_dir)
+                        zipf.write(file_path, arcname)
             
-            # Extract all text from paragraphs
-            text_parts = []
-            for p in note_elem.findall(f'.//{{{NAMESPACES["w"]}}}p'):
-                for t in p.findall(f'.//{{{NAMESPACES["w"]}}}t'):
+            return True, "Hyperlinks activated successfully"
+
+        except Exception as e:
+            return False, str(e)
+        finally:
+            shutil.rmtree(temp_dir)
+
+
+# =============================================================================
+# WORD DOCUMENT PROCESSOR (from monolithic version - WORKING)
+# =============================================================================
+
+class WordDocumentProcessor:
+    """
+    Processes Word documents to read and write endnotes/footnotes.
+    Preserves the main document body while allowing citation fixes.
+    
+    KEY: Uses temp directory extraction for reliable XML handling.
+    """
+    
+    NS = {
+        'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+        'xml': 'http://www.w3.org/XML/1998/namespace'
+    }
+    
+    def __init__(self, file_bytes):
+        """Initialize with file bytes."""
+        self.temp_dir = tempfile.mkdtemp()
+        
+        # Extract docx to temp directory
+        with zipfile.ZipFile(io.BytesIO(file_bytes), 'r') as z:
+            z.extractall(self.temp_dir)
+    
+    def get_endnotes(self):
+        """Extract all endnotes from the document."""
+        endnotes_path = os.path.join(self.temp_dir, 'word', 'endnotes.xml')
+        if not os.path.exists(endnotes_path):
+            return []
+        
+        try:
+            tree = ET.parse(endnotes_path)
+            root = tree.getroot()
+            notes = []
+            
+            for endnote in root.findall('.//w:endnote', self.NS):
+                note_id = endnote.get(f"{{{self.NS['w']}}}id")
+                
+                # Skip system endnotes (id 0 and -1)
+                try:
+                    if int(note_id) < 1:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                
+                # Extract all text from this endnote
+                text_parts = []
+                for t in endnote.findall('.//w:t', self.NS):
                     if t.text:
                         text_parts.append(t.text)
+                
+                full_text = "".join(text_parts).strip()
+                if full_text:
+                    notes.append({'id': note_id, 'text': full_text, 'type': 'endnote'})
             
-            text = ''.join(text_parts).strip()
+            return notes
             
-            if text:
-                prefix = 'fn_' if note_type == 'footnote' else ''
-                notes.append({
-                    'id': f'{prefix}{note_id}',
-                    'text': text,
-                    'type': note_type
-                })
+        except Exception as e:
+            print(f"[WordDocumentProcessor] Error reading endnotes: {e}")
+            return []
     
-    except Exception as e:
-        print(f"[Parse] Error parsing {note_type}s: {e}")
-    
-    return notes
-
-
-def update_notes_in_docx(file_bytes, updates, add_links=True):
-    """
-    Update notes in a .docx file with new text.
-    
-    Args:
-        file_bytes: Original document bytes
-        updates: Dict mapping note_id -> new_html
-        add_links: Whether to make URLs clickable
+    def get_footnotes(self):
+        """Extract all footnotes from the document."""
+        footnotes_path = os.path.join(self.temp_dir, 'word', 'footnotes.xml')
+        if not os.path.exists(footnotes_path):
+            return []
         
-    Returns:
-        Modified document bytes
-    """
-    try:
-        # Read the original document
-        input_zip = zipfile.ZipFile(io.BytesIO(file_bytes), 'r')
-        output_buffer = io.BytesIO()
-        output_zip = zipfile.ZipFile(output_buffer, 'w', zipfile.ZIP_DEFLATED)
-        
-        for item in input_zip.namelist():
-            data = input_zip.read(item)
+        try:
+            tree = ET.parse(footnotes_path)
+            root = tree.getroot()
+            notes = []
             
-            # Modify endnotes.xml
-            if item == 'word/endnotes.xml':
-                data = _update_notes_xml(data, updates, 'endnote', add_links)
+            for footnote in root.findall('.//w:footnote', self.NS):
+                note_id = footnote.get(f"{{{self.NS['w']}}}id")
+                
+                # Skip system footnotes (id 0 and -1)
+                try:
+                    if int(note_id) < 1:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                
+                # Extract all text
+                text_parts = []
+                for t in footnote.findall('.//w:t', self.NS):
+                    if t.text:
+                        text_parts.append(t.text)
+                
+                full_text = "".join(text_parts).strip()
+                if full_text:
+                    notes.append({'id': f'fn_{note_id}', 'text': full_text, 'type': 'footnote'})
             
-            # Modify footnotes.xml
-            elif item == 'word/footnotes.xml':
-                data = _update_notes_xml(data, updates, 'footnote', add_links)
+            return notes
             
-            output_zip.writestr(item, data)
-        
-        input_zip.close()
-        output_zip.close()
-        
-        return output_buffer.getvalue()
+        except Exception as e:
+            print(f"[WordDocumentProcessor] Error reading footnotes: {e}")
+            return []
     
-    except Exception as e:
-        print(f"[Update] Error updating document: {e}")
-        raise
-
-
-def _update_notes_xml(xml_bytes, updates, note_type, add_links=True):
-    """Update notes in XML with new text."""
-    try:
-        root = ET.fromstring(xml_bytes)
+    def write_endnote(self, note_id, new_content):
+        """
+        Replace an endnote's content with new formatted citation.
+        Handles <i> tags for italics. PRESERVES the endnoteRef element.
+        """
+        endnotes_path = os.path.join(self.temp_dir, 'word', 'endnotes.xml')
+        if not os.path.exists(endnotes_path):
+            return False
         
-        tag = f'{{{NAMESPACES["w"]}}}{note_type}'
-        for note_elem in root.findall(f'.//{tag}'):
-            note_id = note_elem.get(f'{{{NAMESPACES["w"]}}}id')
+        try:
+            # Register namespace to preserve it
+            ET.register_namespace('w', self.NS['w'])
+            ET.register_namespace('xml', self.NS['xml'])
             
-            # Check if we have an update for this note
-            prefix = 'fn_' if note_type == 'footnote' else ''
-            lookup_id = f'{prefix}{note_id}'
+            tree = ET.parse(endnotes_path)
+            root = tree.getroot()
             
-            if lookup_id in updates:
-                new_text = updates[lookup_id]
-                _replace_note_content(note_elem, new_text, add_links)
+            # Find the target endnote
+            target = None
+            for endnote in root.findall('.//w:endnote', self.NS):
+                if endnote.get(f"{{{self.NS['w']}}}id") == str(note_id):
+                    target = endnote
+                    break
+            
+            if target is None:
+                return False
+            
+            # Find or create paragraph
+            para = target.find('.//w:p', self.NS)
+            if para is None:
+                para = ET.SubElement(target, f"{{{self.NS['w']}}}p")
+            else:
+                # FIXED: Preserve paragraph properties AND endnoteRef run
+                preserved_pPr = None
+                preserved_endnoteRef_run = None
+                
+                for child in list(para):
+                    tag = child.tag.replace(f"{{{self.NS['w']}}}", "")
+                    
+                    # Preserve paragraph properties
+                    if tag == 'pPr':
+                        preserved_pPr = child
+                        continue
+                    
+                    # Check if this run contains endnoteRef
+                    if tag == 'r':
+                        endnote_ref = child.find(f".//{{{self.NS['w']}}}endnoteRef")
+                        if endnote_ref is not None:
+                            preserved_endnoteRef_run = child
+                            continue
+                    
+                    # Remove all other children
+                    para.remove(child)
+                
+                # If no endnoteRef run was found, create one
+                if preserved_endnoteRef_run is None:
+                    ref_run = ET.Element(f"{{{self.NS['w']}}}r")
+                    rPr = ET.SubElement(ref_run, f"{{{self.NS['w']}}}rPr")
+                    rStyle = ET.SubElement(rPr, f"{{{self.NS['w']}}}rStyle")
+                    rStyle.set(f"{{{self.NS['w']}}}val", "EndnoteReference")
+                    ET.SubElement(ref_run, f"{{{self.NS['w']}}}endnoteRef")
+                    
+                    # Insert after pPr if it exists, otherwise at beginning
+                    if preserved_pPr is not None:
+                        idx = list(para).index(preserved_pPr) + 1
+                        para.insert(idx, ref_run)
+                    else:
+                        para.insert(0, ref_run)
+            
+            # Parse content using regex to handle <i> tags
+            parts = re.split(r'(<i>.*?</i>)', html.unescape(new_content))
+            
+            for part in parts:
+                if not part:
+                    continue
+                    
+                run = ET.SubElement(para, f"{{{self.NS['w']}}}r")
+                
+                # Check if this is italic text
+                italic_match = re.match(r'<i>(.*?)</i>', part)
+                if italic_match:
+                    rPr = ET.SubElement(run, f"{{{self.NS['w']}}}rPr")
+                    ET.SubElement(rPr, f"{{{self.NS['w']}}}i")
+                    text_content = italic_match.group(1)
+                else:
+                    text_content = part
+                
+                t = ET.SubElement(run, f"{{{self.NS['w']}}}t")
+                t.text = text_content
+                t.set(f"{{{self.NS['xml']}}}space", "preserve")
+            
+            tree.write(endnotes_path, encoding='UTF-8', xml_declaration=True)
+            return True
+            
+        except Exception as e:
+            print(f"[WordDocumentProcessor] Error writing endnote: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def write_footnote(self, note_id, new_content):
+        """
+        Replace a footnote's content with new formatted citation.
+        Handles <i> tags for italics. PRESERVES the footnoteRef element.
+        """
+        # Remove fn_ prefix if present
+        if str(note_id).startswith('fn_'):
+            note_id = str(note_id)[3:]
         
-        return ET.tostring(root, encoding='unicode').encode('utf-8')
-    
-    except Exception as e:
-        print(f"[UpdateXML] Error: {e}")
-        return xml_bytes
-
-
-def _replace_note_content(note_elem, new_text, add_links=True):
-    """
-    Replace the content of a note element with new text.
-    
-    CRITICAL: Must preserve the <w:endnoteRef/> or <w:footnoteRef/> element
-    which links the note back to the document. Deleting this corrupts the file.
-    """
-    W_NS = f'{{{NAMESPACES["w"]}}}'
-    
-    # Find all paragraphs
-    paragraphs = note_elem.findall(f'.//{W_NS}p')
-    if not paragraphs:
-        return
-    
-    # Work with the first paragraph (contains reference marker)
-    first_p = paragraphs[0]
-    
-    # Find runs - identify which has the reference marker
-    runs = first_p.findall(f'{W_NS}r')
-    ref_run = None
-    text_runs = []
-    
-    for run in runs:
-        has_ref = (
-            run.find(f'{W_NS}endnoteRef') is not None or
-            run.find(f'{W_NS}footnoteRef') is not None
-        )
-        if has_ref:
-            ref_run = run  # KEEP this one!
-        else:
-            text_runs.append(run)
-    
-    # Remove old text runs (but keep reference marker run)
-    for run in text_runs:
-        first_p.remove(run)
-    
-    # Remove additional paragraphs (keep only first)
-    for p in paragraphs[1:]:
-        note_elem.remove(p)
-    
-    # Parse the new text for formatting
-    parts = _parse_formatted_text(new_text)
-    
-    # Add new text runs after the reference marker
-    for i, part in enumerate(parts):
-        new_run = ET.SubElement(first_p, f'{W_NS}r')
+        footnotes_path = os.path.join(self.temp_dir, 'word', 'footnotes.xml')
+        if not os.path.exists(footnotes_path):
+            return False
         
-        # Add formatting if needed
-        if part.get('italic') or part.get('bold'):
-            rPr = ET.SubElement(new_run, f'{W_NS}rPr')
-            if part.get('italic'):
-                ET.SubElement(rPr, f'{W_NS}i')
-            if part.get('bold'):
-                ET.SubElement(rPr, f'{W_NS}b')
-        
-        # Add text element
-        t = ET.SubElement(new_run, f'{W_NS}t')
-        t.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
-        text = part['text']
-        if i == 0:
-            text = ' ' + text  # Add space after reference number
-        t.text = text
-
-
-def _parse_formatted_text(html_text):
-    """
-    Parse HTML-like text into parts with formatting info.
+        try:
+            ET.register_namespace('w', self.NS['w'])
+            ET.register_namespace('xml', self.NS['xml'])
+            
+            tree = ET.parse(footnotes_path)
+            root = tree.getroot()
+            
+            target = None
+            for footnote in root.findall('.//w:footnote', self.NS):
+                if footnote.get(f"{{{self.NS['w']}}}id") == str(note_id):
+                    target = footnote
+                    break
+            
+            if target is None:
+                return False
+            
+            para = target.find('.//w:p', self.NS)
+            if para is None:
+                para = ET.SubElement(target, f"{{{self.NS['w']}}}p")
+            else:
+                # FIXED: Preserve paragraph properties AND footnoteRef run
+                preserved_pPr = None
+                preserved_footnoteRef_run = None
+                
+                for child in list(para):
+                    tag = child.tag.replace(f"{{{self.NS['w']}}}", "")
+                    
+                    # Preserve paragraph properties
+                    if tag == 'pPr':
+                        preserved_pPr = child
+                        continue
+                    
+                    # Check if this run contains footnoteRef
+                    if tag == 'r':
+                        footnote_ref = child.find(f".//{{{self.NS['w']}}}footnoteRef")
+                        if footnote_ref is not None:
+                            preserved_footnoteRef_run = child
+                            continue
+                    
+                    # Remove all other children
+                    para.remove(child)
+                
+                # If no footnoteRef run was found, create one
+                if preserved_footnoteRef_run is None:
+                    ref_run = ET.Element(f"{{{self.NS['w']}}}r")
+                    rPr = ET.SubElement(ref_run, f"{{{self.NS['w']}}}rPr")
+                    rStyle = ET.SubElement(rPr, f"{{{self.NS['w']}}}rStyle")
+                    rStyle.set(f"{{{self.NS['w']}}}val", "FootnoteReference")
+                    ET.SubElement(ref_run, f"{{{self.NS['w']}}}footnoteRef")
+                    
+                    if preserved_pPr is not None:
+                        idx = list(para).index(preserved_pPr) + 1
+                        para.insert(idx, ref_run)
+                    else:
+                        para.insert(0, ref_run)
+            
+            # Parse content using regex to handle <i> tags
+            parts = re.split(r'(<i>.*?</i>)', html.unescape(new_content))
+            
+            for part in parts:
+                if not part:
+                    continue
+                    
+                run = ET.SubElement(para, f"{{{self.NS['w']}}}r")
+                
+                italic_match = re.match(r'<i>(.*?)</i>', part)
+                if italic_match:
+                    rPr = ET.SubElement(run, f"{{{self.NS['w']}}}rPr")
+                    ET.SubElement(rPr, f"{{{self.NS['w']}}}i")
+                    text_content = italic_match.group(1)
+                else:
+                    text_content = part
+                
+                t = ET.SubElement(run, f"{{{self.NS['w']}}}t")
+                t.text = text_content
+                t.set(f"{{{self.NS['xml']}}}space", "preserve")
+            
+            tree.write(footnotes_path, encoding='UTF-8', xml_declaration=True)
+            return True
+            
+        except Exception as e:
+            print(f"[WordDocumentProcessor] Error writing footnote: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
-    Handles:
-    - <i>...</i> for italics
-    - <em>...</em> for italics
-    - <b>...</b> for bold
-    - <strong>...</strong> for bold
+    def save_to_buffer(self):
+        """Save the modified document to a BytesIO buffer."""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk(self.temp_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, self.temp_dir)
+                    zipf.write(file_path, arcname)
+        buffer.seek(0)
+        return buffer
     
-    Returns list of dicts: [{'text': '...', 'italic': bool, 'bold': bool}, ...]
-    """
-    parts = []
+    def cleanup(self):
+        """Remove temporary files."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
     
-    # Simple regex-based parsing
-    pattern = r'<(i|em|b|strong)>(.*?)</\1>|([^<]+)'
-    
-    for match in re.finditer(pattern, html_text, re.DOTALL | re.IGNORECASE):
-        tag = match.group(1)
-        tagged_text = match.group(2)
-        plain_text = match.group(3)
-        
-        if plain_text:
-            # Plain text
-            parts.append({'text': plain_text, 'italic': False, 'bold': False})
-        elif tag and tagged_text:
-            # Tagged text
-            is_italic = tag.lower() in ['i', 'em']
-            is_bold = tag.lower() in ['b', 'strong']
-            parts.append({'text': tagged_text, 'italic': is_italic, 'bold': is_bold})
-    
-    # If no matches, return the whole text as plain
-    if not parts:
-        parts.append({'text': html_text, 'italic': False, 'bold': False})
-    
-    return parts
+    def __del__(self):
+        """Cleanup on deletion."""
+        try:
+            self.cleanup()
+        except:
+            pass
 
 
 # =============================================================================
@@ -325,19 +492,6 @@ def _parse_formatted_text(html_text):
 def search_citations(query, style='chicago', max_results=5):
     """
     Search for citation candidates - TYPE-AWARE routing.
-    
-    This is the key function that routes:
-    - Legal queries → Legal engine only (not Crossref/Google Books)
-    - Journal queries → Academic engines (not Google Books)
-    - Book queries → Book engines
-    
-    Args:
-        query: Raw citation text
-        style: Citation style name
-        max_results: Maximum candidates to return
-        
-    Returns:
-        List of result dicts with 'formatted', 'source', 'type', 'confidence'
     """
     results = []
     
@@ -361,54 +515,44 @@ def search_citations(query, style='chicago', max_results=5):
     # Get formatter
     formatter = get_formatter(full_style)
     
-    # ==========================================================================
     # TYPE-AWARE ROUTING
-    # ==========================================================================
-    
     if citation_type == CitationType.LEGAL:
-        # LEGAL: Only search legal engine
         metadata = search_legal(query)
         if metadata and metadata.has_minimum_data():
             results.append(_format_result(metadata, formatter, 'high'))
     
     elif citation_type == CitationType.INTERVIEW:
-        # INTERVIEW: Local extractor only
         metadata = extract_interview(query)
         if metadata:
             results.append(_format_result(metadata, formatter, 'high'))
     
     elif citation_type == CitationType.NEWSPAPER:
-        # NEWSPAPER: Local extractor
         metadata = extract_newspaper(query)
         if metadata:
             results.append(_format_result(metadata, formatter, 'high'))
     
     elif citation_type == CitationType.GOVERNMENT:
-        # GOVERNMENT: Local extractor
         metadata = extract_government(query)
         if metadata:
             results.append(_format_result(metadata, formatter, 'high'))
     
     elif citation_type == CitationType.URL:
-        # URL: Local extractor
         metadata = extract_url(query)
         if metadata:
             results.append(_format_result(metadata, formatter, 'medium'))
     
     elif citation_type == CitationType.MEDICAL:
-        # MEDICAL: PubMed + academic engines
         candidates = _search_medical_sources(query, max_results)
         for meta in candidates:
             results.append(_format_result(meta, formatter, 'high'))
     
     elif citation_type == CitationType.BOOK:
-        # BOOK: Book engines only
         candidates = _search_book_sources(query, max_results)
         for meta in candidates:
             results.append(_format_result(meta, formatter, 'high'))
     
     else:
-        # JOURNAL / UNKNOWN: Academic engines + Google CSE (NO Google Books)
+        # JOURNAL / UNKNOWN
         candidates = _search_journal_sources(query, max_results)
         for meta in candidates:
             conf = 'high' if meta.source_engine in ['Crossref', 'Google CSE'] else 'medium'
@@ -544,7 +688,7 @@ def _search_medical_sources(query, limit=5):
 
 
 # =============================================================================
-# FRONTEND ROUTES (matches index.html expectations)
+# FRONTEND ROUTES
 # =============================================================================
 
 @app.route('/')
@@ -555,13 +699,7 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    """
-    Upload a document and extract endnotes/footnotes.
-    
-    Frontend expects:
-        Request: FormData with 'file'
-        Response: { success: true, endnotes: [{id, text, type}, ...] }
-    """
+    """Upload a document and extract endnotes/footnotes."""
     try:
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': 'No file provided'}), 400
@@ -577,12 +715,24 @@ def upload():
         # Read file bytes
         file_bytes = file.read()
         
+        # Create document processor
+        doc_processor = WordDocumentProcessor(file_bytes)
+        
         # Extract notes
-        endnotes, footnotes = extract_notes_from_docx(file_bytes)
+        endnotes = doc_processor.get_endnotes()
+        footnotes = doc_processor.get_footnotes()
         
         # Store in session
         session_data = get_session_data()
-        session_data['doc_bytes'] = file_bytes
+        
+        # Cleanup old processor if exists
+        if session_data.get('doc_processor'):
+            try:
+                session_data['doc_processor'].cleanup()
+            except:
+                pass
+        
+        session_data['doc_processor'] = doc_processor
         session_data['endnotes'] = endnotes
         session_data['footnotes'] = footnotes
         session_data['updates'] = {}
@@ -608,13 +758,7 @@ def upload():
 
 @app.route('/search', methods=['POST'])
 def search():
-    """
-    Search for citation candidates.
-    
-    Frontend expects:
-        Request: { text: "...", style: "chicago" }
-        Response: { results: [{formatted, source, type, confidence}, ...] }
-    """
+    """Search for citation candidates."""
     try:
         data = request.get_json()
         text = data.get('text', '').strip()
@@ -647,13 +791,7 @@ def search():
 
 @app.route('/update', methods=['POST'])
 def update():
-    """
-    Update a specific note with new text.
-    
-    Frontend expects:
-        Request: { id: "1", html: "<i>Citation</i>..." }
-        Response: { success: true }
-    """
+    """Update a specific note with new text."""
     try:
         data = request.get_json()
         note_id = data.get('id')
@@ -678,12 +816,7 @@ def update():
 
 @app.route('/reset', methods=['POST'])
 def reset():
-    """
-    Clear session state and start fresh.
-    
-    Frontend expects:
-        Response: { success: true }
-    """
+    """Clear session state and start fresh."""
     try:
         clear_session_data()
         return jsonify({'success': True})
@@ -693,24 +826,38 @@ def reset():
 
 @app.route('/download', methods=['GET'])
 def download():
-    """
-    Download the modified document with all updates applied.
-    
-    Frontend expects:
-        Response: .docx file download
-    """
+    """Download the modified document with all updates applied."""
     try:
         session_data = get_session_data()
         
-        if not session_data.get('doc_bytes'):
+        doc_processor = session_data.get('doc_processor')
+        if not doc_processor:
             return jsonify({'success': False, 'error': 'No document uploaded'}), 400
         
+        updates = session_data.get('updates', {})
+        
         # Apply all updates to the document
-        updated_bytes = update_notes_in_docx(
-            session_data['doc_bytes'],
-            session_data.get('updates', {}),
-            add_links=True
-        )
+        for note_id, new_html in updates.items():
+            if note_id.startswith('fn_'):
+                doc_processor.write_footnote(note_id, new_html)
+            else:
+                doc_processor.write_endnote(note_id, new_html)
+        
+        # Save to buffer
+        output_buffer = doc_processor.save_to_buffer()
+        
+        # Activate hyperlinks
+        with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as tmp:
+            tmp.write(output_buffer.getvalue())
+            tmp_path = tmp.name
+        
+        success, msg = LinkActivator.process(tmp_path)
+        print(f"[Download] LinkActivator: {success}, {msg}")
+        
+        with open(tmp_path, 'rb') as f:
+            final_bytes = f.read()
+        
+        os.unlink(tmp_path)
         
         # Generate filename
         original_name = session_data.get('filename', 'document.docx')
@@ -718,7 +865,7 @@ def download():
         download_name = f'{base_name}_formatted.docx'
         
         return send_file(
-            io.BytesIO(updated_bytes),
+            io.BytesIO(final_bytes),
             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             as_attachment=True,
             download_name=download_name
@@ -731,20 +878,12 @@ def download():
 
 
 # =============================================================================
-# API ROUTES (for programmatic access - backwards compatibility)
+# API ROUTES
 # =============================================================================
 
 @app.route('/api/cite', methods=['POST'])
 def api_cite():
-    """
-    API endpoint for single citation lookup.
-    
-    Request JSON:
-        { "query": "Loving v. Virginia", "style": "Chicago" }
-    
-    Response JSON:
-        { "success": true, "citation": "...", "type": "legal", "metadata": {...} }
-    """
+    """API endpoint for single citation lookup."""
     try:
         data = request.get_json()
         query = data.get('query', '').strip()
@@ -753,7 +892,6 @@ def api_cite():
         if not query:
             return jsonify({'success': False, 'error': 'No query provided'}), 400
         
-        # Get single best result
         results = search_citations(query, style, max_results=1)
         
         if results:
@@ -764,11 +902,7 @@ def api_cite():
                 'metadata': results[0].get('metadata', {})
             })
         else:
-            return jsonify({
-                'success': False,
-                'error': 'No citation found',
-                'query': query
-            }), 404
+            return jsonify({'success': False, 'error': 'No citation found', 'query': query}), 404
     
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -776,15 +910,7 @@ def api_cite():
 
 @app.route('/api/cite/candidates', methods=['POST'])
 def api_cite_candidates():
-    """
-    API endpoint for multiple citation candidates.
-    
-    Request JSON:
-        { "query": "Roe v Wade", "style": "Chicago", "max_results": 5 }
-    
-    Response JSON:
-        { "success": true, "detected_type": "legal", "candidates": [...] }
-    """
+    """API endpoint for multiple citation candidates."""
     try:
         data = request.get_json()
         query = data.get('query', '').strip()
@@ -794,10 +920,7 @@ def api_cite_candidates():
         if not query:
             return jsonify({'success': False, 'error': 'No query provided'}), 400
         
-        # Detect type
         detection = detect_type(query)
-        
-        # Get candidates
         results = search_citations(query, style, max_results)
         
         return jsonify({
@@ -815,15 +938,7 @@ def api_cite_candidates():
 
 @app.route('/api/detect', methods=['POST'])
 def api_detect():
-    """
-    API endpoint for type detection only.
-    
-    Request JSON:
-        { "query": "Roe v. Wade" }
-    
-    Response JSON:
-        { "type": "legal", "confidence": 0.9 }
-    """
+    """API endpoint for type detection only."""
     try:
         data = request.get_json()
         query = data.get('query', '').strip()
@@ -845,9 +960,7 @@ def api_detect():
 @app.route('/api/styles', methods=['GET'])
 def api_styles():
     """Return available citation styles."""
-    return jsonify({
-        'styles': ['Chicago', 'Bluebook', 'OSCOLA', 'APA', 'MLA']
-    })
+    return jsonify({'styles': ['Chicago', 'Bluebook', 'OSCOLA', 'APA', 'MLA']})
 
 
 @app.route('/health', methods=['GET'])
@@ -855,7 +968,7 @@ def health():
     """Health check endpoint."""
     return jsonify({
         'status': 'healthy',
-        'version': '2.0',
+        'version': '2.1',
         'timestamp': datetime.utcnow().isoformat()
     })
 
