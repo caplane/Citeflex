@@ -411,15 +411,15 @@ def is_messy_note(query: str) -> bool:
     """
     Detect if a query looks like a messy note rather than a clean citation.
     
-    Messy notes are informal references like:
-    - "Eric wrote an article called trains"
-    - "Woo wrote a book called master slave"
-    - "Smith's book about the Civil War"
+    Messy notes include:
+    - Informal references like "Eric wrote an article called trains"
+    - Terse keyword queries like "Caplan trains brains 1995"
+    - Partial references like "Woo master slave"
     
     Clean citations have structured elements like:
     - DOI, ISBN, volume/issue numbers
-    - Publisher names
-    - Formal citation patterns
+    - Publisher names with place
+    - Formal citation patterns (journal name, page numbers)
     
     Returns:
         True if query appears to be a messy note needing enhancement
@@ -441,10 +441,39 @@ def is_messy_note(query: str) -> bool:
     if query.startswith(('http://', 'https://')):  # URL
         return False
     
-    # Check for messy note patterns
+    # Check for explicit messy note patterns
     for pattern in MESSY_NOTE_PATTERNS:
         if re.search(pattern, lower):
             return True
+    
+    # NEW: Detect terse keyword-only queries that need enhancement
+    # These look like: "Author keyword keyword year" or "Author title-words"
+    # Characteristics:
+    # - Short (under 10 words)
+    # - No punctuation like commas, colons, periods (except at end)
+    # - No journal/publisher indicators
+    # - Mostly just keywords
+    
+    # Remove trailing period for analysis
+    clean = query.rstrip('.')
+    
+    # Count words
+    words = clean.split()
+    word_count = len(words)
+    
+    # If it's very short (2-8 words) with no structural punctuation, likely needs enhancement
+    if 2 <= word_count <= 8:
+        # Check for structural punctuation (commas, colons, semicolons indicate structure)
+        if not re.search(r'[,:;]', clean):
+            # Check if it lacks journal/publisher indicators
+            publisher_indicators = ['press', 'university', 'journal', 'review', 'quarterly', 
+                                    'publishing', 'publishers', 'books', 'edition']
+            has_publisher = any(ind in lower for ind in publisher_indicators)
+            
+            if not has_publisher:
+                # Looks like a terse query - enhance it
+                print(f"[is_messy_note] Detected terse keyword query: '{query}'")
+                return True
     
     return False
 
