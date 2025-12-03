@@ -193,10 +193,10 @@ Respond with JSON only:
         """
         Use Gemini to enhance/clean a search query.
         
-        This can:
-        - Extract the core title from a messy reference
-        - Identify author names
-        - Remove noise words
+        This uses Gemini's knowledge to:
+        - Recognize partial references and expand to full titles
+        - Identify full author names from partial names
+        - Add publication details (journal name, publisher, year)
         
         Args:
             query: The original query
@@ -211,23 +211,41 @@ Respond with JSON only:
         try:
             url = f"{GEMINI_API_URL}/{GEMINI_MODEL}:generateContent?key={self.api_key}"
             
-            prompt = f'''Extract the key search terms from this {citation_type.name.lower()} reference.
+            prompt = f'''You are a citation expert. A user has provided a partial or informal reference to a {citation_type.name.lower()}.
 
-Reference: "{query}"
+User's reference: "{query}"
 
-Return JSON with the most important terms for finding this source:
+Your task: Use your knowledge to identify what source this refers to, then provide the best search query to find it.
+
+IMPORTANT: If you recognize this as a specific known work, provide the FULL details:
+- Full title (not abbreviated)
+- Full author name (first and last)
+- Year of publication
+- For articles: journal name
+- For books: publisher name
+
+Examples:
+- "Woo master slave" → You might recognize this as Ilyon Woo's "Master Slave Husband Wife" (2023)
+- "Caplan trains brains" → You might recognize this as Eric Caplan's article in Bulletin of the History of Medicine
+- "Scull desperate remedies" → You might recognize Andrew Scull's "Desperate Remedies" (Harvard, 2022)
+
+Return JSON:
 {{
-    "search_query": "cleaned search terms",
-    "title_fragment": "if identifiable",
-    "author_fragment": "if identifiable",
-    "year": "if identifiable"
-}}'''
+    "recognized": true/false,
+    "search_query": "optimal search query with full title and author",
+    "full_title": "complete title if known",
+    "full_author": "complete author name if known",
+    "year": "publication year if known",
+    "journal_or_publisher": "journal name or publisher if known"
+}}
+
+If you don't recognize the specific work, just clean up the query by removing noise words.'''
             
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
                     "temperature": 0.1,
-                    "maxOutputTokens": 128,
+                    "maxOutputTokens": 256,
                     "responseMimeType": "application/json"
                 }
             }
@@ -241,7 +259,15 @@ Return JSON with the most important terms for finding this source:
                     text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
                     try:
                         result = json.loads(text)
-                        return result.get("search_query", query)
+                        search_query = result.get("search_query", query)
+                        
+                        # Log what Gemini found
+                        if result.get("recognized"):
+                            full_title = result.get("full_title", "")
+                            full_author = result.get("full_author", "")
+                            print(f"[GeminiEnhance] Recognized: {full_author} - {full_title}")
+                        
+                        return search_query
                     except:
                         pass
         except Exception as e:
