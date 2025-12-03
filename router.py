@@ -111,7 +111,6 @@ def _validate_author_match(original_query: str, result: CitationMetadata) -> boo
     
     # If we extracted an author but result has no authors, that's suspicious
     if not result or not result.authors:
-        print(f"[Validate] Query has author '{query_author}' but result has no authors - rejecting")
         return False
     
     # Check if any result author contains this name
@@ -126,6 +125,25 @@ def _validate_author_match(original_query: str, result: CitationMetadata) -> boo
     return False
 
 
+def _log_validation_warning(engine_name: str, result: CitationMetadata, 
+                            expected_year: Optional[str], query: str) -> None:
+    """Log validation warnings without rejecting results."""
+    warnings = []
+    
+    if expected_year and result.year:
+        try:
+            if abs(int(expected_year) - int(result.year)) > 1:
+                warnings.append(f"year mismatch (expected {expected_year}, got {result.year})")
+        except (ValueError, TypeError):
+            pass
+    
+    if not _validate_author_match(query, result):
+        warnings.append("possible author mismatch")
+    
+    if warnings:
+        print(f"[Search] Warning for {engine_name} result '{result.title}': {', '.join(warnings)}")
+
+
 # -----------------------------------------------------------------------------
 # Search functions
 # -----------------------------------------------------------------------------
@@ -134,17 +152,18 @@ def search_journal(query: str) -> Optional[CitationMetadata]:
     """
     Search for a journal article across multiple engines.
     
-    Search order:
-    1. Semantic Scholar (author-aware)
+    Search order (optimized for finding obscure/older articles):
+    1. Google CSE FIRST (searches JSTOR, Google Scholar - best coverage)
     2. Crossref (DOI registry)
     3. OpenAlex (broad coverage)
-    4. Google CSE (nuclear fallback - searches JSTOR, Scholar, etc.)
+    4. Semantic Scholar (author-aware)
     
-    Uses multiple search strategies and validates results against query hints.
+    Uses multiple search strategies. Logs validation warnings but accepts
+    first valid result (trusts search engine relevance ranking).
     
     Returns first successful result.
     """
-    # Extract year from query if present (for validation)
+    # Extract year from query if present (for validation logging)
     year_match = re.search(r'\b(19\d{2}|20\d{2})\b', query)
     expected_year = year_match.group(1) if year_match else None
     
@@ -165,45 +184,33 @@ def search_journal(query: str) -> Optional[CitationMetadata]:
         if query_no_year and query_no_year != query:
             queries_to_try.append(query_no_year)
     
-    # Try specialized engines with each query variation
+    # ==========================================================================
+    # Engine 1: Google CSE FIRST (best for JSTOR, older articles, obscure sources)
+    # ==========================================================================
+    google_cse = _get_engine('google_cse')
+    if google_cse:
+        for search_query in queries_to_try[:2]:  # Try first two variations
+            print(f"[SearchJournal] Trying Google CSE: '{search_query}'")
+            result = google_cse.search(search_query)
+            if result and result.has_minimum_data():
+                _log_validation_warning('Google CSE', result, expected_year, query)
+                print(f"[SearchJournal] Found via Google CSE: {result.title}")
+                return result
+    
+    # ==========================================================================
+    # Engines 2-4: Other academic engines with query variations
+    # ==========================================================================
     for search_query in queries_to_try:
         print(f"[SearchJournal] Trying: '{search_query}'")
         
-        for engine_name in ['semantic_scholar', 'crossref', 'openalex']:
+        for engine_name in ['crossref', 'openalex', 'semantic_scholar']:
             engine = _get_engine(engine_name)
             if engine:
                 result = engine.search(search_query)
                 if result and result.has_minimum_data():
-                    # Validate year if we have one from the query
-                    if _validate_year_match(expected_year, result):
-                        # Also validate author
-                        if _validate_author_match(query, result):
-                            print(f"[SearchJournal] Found via {engine_name}: {result.title} ({result.year})")
-                            return result
-                        else:
-                            print(f"[SearchJournal] Skipping (author mismatch): {result.title}")
-                    else:
-                        print(f"[SearchJournal] Skipping (year mismatch, expected {expected_year}): {result.title} ({result.year})")
-    
-    # Fallback to Google CSE (searches JSTOR, Google Scholar, etc.)
-    # Still validate but be slightly less strict
-    google_cse = _get_engine('google_cse')
-    if google_cse:
-        for search_query in queries_to_try[:2]:  # Only try first two variations
-            result = google_cse.search(search_query)
-            if result and result.has_minimum_data():
-                year_ok = _validate_year_match(expected_year, result) or expected_year is None
-                author_ok = _validate_author_match(query, result)
-                if year_ok and author_ok:
-                    print(f"[SearchJournal] Found via Google CSE: {result.title}")
+                    _log_validation_warning(engine_name, result, expected_year, query)
+                    print(f"[SearchJournal] Found via {engine_name}: {result.title} ({result.year})")
                     return result
-                else:
-                    reasons = []
-                    if not year_ok:
-                        reasons.append(f"year mismatch (expected {expected_year}, got {result.year})")
-                    if not author_ok:
-                        reasons.append("author mismatch")
-                    print(f"[SearchJournal] Skipping Google CSE ({', '.join(reasons)}): {result.title}")
     
     return None
 
@@ -221,6 +228,8 @@ def search_book(query: str) -> Optional[CitationMetadata]:
     1. Original query + "book" context
     2. Original query alone
     3. Query variations (fuller title if possible)
+    
+    Logs validation warnings but accepts first valid result.
     
     Returns first successful result.
     """
@@ -275,12 +284,11 @@ def search_book(query: str) -> Optional[CitationMetadata]:
             if engine:
                 result = engine.search(search_query)
                 if result and result.has_minimum_data():
-                    # Validate: if we extracted an author, check it matches
-                    if _validate_author_match(query, result):
-                        print(f"[SearchBook] Found via {engine_name}: {result.title}")
-                        return result
-                    else:
-                        print(f"[SearchBook] Skipping {engine_name} result (author mismatch): {result.title}")
+                    # Log validation warning but accept result
+                    if not _validate_author_match(query, result):
+                        print(f"[SearchBook] Warning: possible author mismatch for '{result.title}'")
+                    print(f"[SearchBook] Found via {engine_name}: {result.title}")
+                    return result
     
     # Try OpenAlex as fallback (sometimes has books)
     openalex = _get_engine('openalex')
