@@ -219,6 +219,6 @@ def _normalize_crossref(data: Dict[str, Any], original_text: str) -> CitationMet
         publisher=data.get('publisher', ''),
         doi=doi,
         url=doi_url,
-        raw_query=original_text,
+        raw_source=original_text,
         source_engine='Crossref (DOI Direct)'
     )
