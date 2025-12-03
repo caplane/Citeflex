@@ -183,50 +183,115 @@ def search_legal(query: str) -> Optional[CitationMetadata]:
     return None
 
 
-def search_all_sources(query: str, max_results: int = 5) -> List[CitationMetadata]:
+# =============================================================================
+# SEARCH_ALL_SOURCES - TYPE-AWARE VERSION
+# =============================================================================
+
+def search_all_sources(query: str, citation_type: CitationType = None, max_results: int = 5) -> List[CitationMetadata]:
     """
     Search multiple engines and return all results for user selection.
     
-    Useful for ambiguous queries where the user should choose.
+    TYPE-AWARE: Routes to appropriate engines based on detected type.
+    This prevents:
+    - "Roe v Wade" returning journal articles ABOUT the case instead of the case itself
+    - "Novak weak state" returning unrelated books
     
     Args:
         query: Search query
+        citation_type: Detected type (if None, will auto-detect)
         max_results: Maximum total results to return
         
     Returns:
-        List of CitationMetadata from different sources
+        List of CitationMetadata from appropriate sources
     """
     results = []
     seen_titles = set()
     
-    def add_results(engine_name: str, limit: int = 2):
-        """Helper to add results from an engine."""
-        nonlocal results
-        engine = _get_engine(engine_name)
-        if engine:
-            engine_results = engine.search_multiple(query, limit=limit)
-            for r in engine_results:
-                # Deduplicate by title
-                title_key = r.title.lower().strip()[:50] if r.title else ''
-                if title_key and title_key not in seen_titles:
-                    seen_titles.add(title_key)
-                    results.append(r)
-                    if len(results) >= max_results:
-                        return True
+    # Auto-detect type if not provided
+    if citation_type is None:
+        detection = detect_type(query)
+        citation_type = detection.citation_type
+        print(f"[search_all_sources] Auto-detected type: {citation_type.name}")
+    
+    def add_result(result: CitationMetadata) -> bool:
+        """Add a single result, deduplicating. Returns True if max reached."""
+        if result and result.has_minimum_data():
+            # Use case_name for legal, title for others
+            if result.citation_type == CitationType.LEGAL and result.case_name:
+                key = result.case_name.lower().strip()[:50]
+            else:
+                key = result.title.lower().strip()[:50] if result.title else ''
+            
+            if key and key not in seen_titles:
+                seen_titles.add(key)
+                results.append(result)
+                return len(results) >= max_results
         return False
     
-    # Search academic engines first
-    for engine_name in ['crossref', 'openalex', 'semantic_scholar']:
-        if add_results(engine_name, limit=2):
-            break
+    def add_results_from_engine(engine_name: str, limit: int = 2) -> bool:
+        """Add results from an engine. Returns True if max reached."""
+        engine = _get_engine(engine_name)
+        if engine:
+            if hasattr(engine, 'search_multiple'):
+                engine_results = engine.search_multiple(query, limit=limit)
+                for r in engine_results:
+                    if add_result(r):
+                        return True
+            else:
+                # Fallback to single search
+                result = engine.search(query)
+                if add_result(result):
+                    return True
+        return False
     
-    # If we need more results, try Google CSE
-    if len(results) < max_results:
-        add_results('google_cse', limit=max_results - len(results))
+    # ==========================================================================
+    # TYPE-AWARE ROUTING
+    # ==========================================================================
     
-    # Also try book engines if we still need more
-    if len(results) < max_results:
-        add_results('google_books', limit=2)
+    if citation_type == CitationType.LEGAL:
+        # LEGAL: Only search legal engine
+        # Prevents "Roe v Wade" from returning articles ABOUT the case
+        print(f"[search_all_sources] Routing to LEGAL engine only")
+        add_results_from_engine('legal', limit=max_results)
+    
+    elif citation_type == CitationType.BOOK:
+        # BOOK: Search book engines only
+        print(f"[search_all_sources] Routing to BOOK engines")
+        for engine_name in ['google_books', 'open_library']:
+            if add_results_from_engine(engine_name, limit=3):
+                break
+        if len(results) < max_results:
+            add_results_from_engine('openalex', limit=2)
+    
+    elif citation_type == CitationType.MEDICAL:
+        # MEDICAL: PubMed first, then academic
+        print(f"[search_all_sources] Routing to MEDICAL engines")
+        add_results_from_engine('pubmed', limit=3)
+        if len(results) < max_results:
+            add_results_from_engine('crossref', limit=2)
+    
+    elif citation_type in [CitationType.INTERVIEW, CitationType.NEWSPAPER, 
+                           CitationType.GOVERNMENT, CitationType.URL]:
+        # LOCAL EXTRACTORS: These don't need multiple results
+        print(f"[search_all_sources] Using local extractor for {citation_type.name}")
+        extracted = extract_by_type(query, citation_type)
+        if extracted:
+            results.append(extracted)
+    
+    else:
+        # JOURNAL, UNKNOWN: Academic engines + Google CSE (NO Google Books)
+        print(f"[search_all_sources] Routing to JOURNAL/ACADEMIC engines")
+        
+        # Google CSE FIRST (best for JSTOR, obscure articles)
+        add_results_from_engine('google_cse', limit=2)
+        
+        # Then other academic engines
+        for engine_name in ['crossref', 'openalex', 'semantic_scholar']:
+            if len(results) >= max_results:
+                break
+            add_results_from_engine(engine_name, limit=2)
+        
+        # NO Google Books for journal queries - prevents noise like "Novak weak state" returning unrelated books
     
     return results[:max_results]
 
@@ -349,6 +414,48 @@ def get_citation(
     formatted = format_citation(metadata, citation_style)
     
     return metadata, formatted
+
+
+def get_citation_candidates(
+    query: str,
+    style: str = "Chicago Manual of Style",
+    max_results: int = 5
+) -> List[dict]:
+    """
+    Get multiple citation candidates for user selection.
+    
+    This powers the "PROPOSED RESOLUTIONS" panel in the UI.
+    Returns formatted citations from appropriate engines based on detected type.
+    
+    Args:
+        query: Raw user input
+        style: Citation style for formatting
+        max_results: Maximum candidates to return
+        
+    Returns:
+        List of dicts with 'formatted', 'source_engine', 'metadata', 'type'
+    """
+    # Detect type first
+    detection = detect_type(query)
+    
+    # Search appropriate engines based on type
+    candidates = search_all_sources(query, detection.citation_type, max_results)
+    
+    # Format each candidate
+    citation_style = CitationStyle.from_string(style)
+    formatter = get_formatter(citation_style)
+    
+    results = []
+    for metadata in candidates:
+        formatted = formatter.format(metadata)
+        results.append({
+            'formatted': formatted,
+            'source_engine': metadata.source_engine,
+            'type': metadata.citation_type.name.lower(),
+            'metadata': metadata.to_dict() if hasattr(metadata, 'to_dict') else {},
+        })
+    
+    return results
 
 
 def process_bulk(
