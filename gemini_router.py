@@ -197,6 +197,7 @@ Respond with JSON only:
         - Recognize partial references and expand to full titles
         - Identify full author names from partial names
         - Add publication details (journal name, publisher, year)
+        - Add domain-specific keywords to help search engines find the right result
         
         Args:
             query: The original query
@@ -215,31 +216,31 @@ Respond with JSON only:
 
 User's reference: "{query}"
 
-Your task: Use your knowledge to identify what source this refers to, then provide the best search query to find it.
+Your task: Use your knowledge to identify what source this refers to, then provide the BEST search query to find it in academic databases.
 
-IMPORTANT: If you recognize this as a specific known work, provide the FULL details:
-- Full title (not abbreviated)
-- Full author name (first and last)
-- Year of publication
-- For articles: journal name
-- For books: publisher name
+CRITICAL INSTRUCTIONS:
+1. If you recognize this as a specific known work, provide FULL bibliographic details
+2. Add DOMAIN-SPECIFIC KEYWORDS that will help search engines find the right article
+3. The search query should be optimized for academic databases like JSTOR, Google Scholar, and Crossref
 
-Examples:
-- "Woo master slave" → You might recognize this as Ilyon Woo's "Master Slave Husband Wife" (2023)
-- "Caplan trains brains" → You might recognize this as Eric Caplan's article in Bulletin of the History of Medicine
-- "Scull desperate remedies" → You might recognize Andrew Scull's "Desperate Remedies" (Harvard, 2022)
+Examples of good query enhancement:
+- "Caplan trains brains sprains" → "Caplan Trains Brains Sprains railway spine neurasthenia" (adds medical history keywords)
+- "Novak myth weak american state" → "Novak Myth of the Weak American State law governance" (adds context)
+- "Woo master slave" → "Ilyon Woo Master Slave Husband Wife" (expands to full title and author)
+- "Scull desperate remedies" → "Andrew Scull Desperate Remedies psychiatry" (adds author first name + field)
 
 Return JSON:
 {{
     "recognized": true/false,
-    "search_query": "optimal search query with full title and author",
+    "search_query": "optimal search query with full details and domain keywords",
     "full_title": "complete title if known",
     "full_author": "complete author name if known",
     "year": "publication year if known",
-    "journal_or_publisher": "journal name or publisher if known"
+    "journal_or_publisher": "journal name or publisher if known",
+    "domain_keywords": ["list", "of", "helpful", "subject", "terms"]
 }}
 
-If you don't recognize the specific work, just clean up the query by removing noise words.'''
+If you don't recognize the specific work, still try to add helpful domain keywords based on the apparent subject matter.'''
             
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
@@ -266,6 +267,10 @@ If you don't recognize the specific work, just clean up the query by removing no
                             full_title = result.get("full_title", "")
                             full_author = result.get("full_author", "")
                             print(f"[GeminiEnhance] Recognized: {full_author} - {full_title}")
+                        else:
+                            domain_keywords = result.get("domain_keywords", [])
+                            if domain_keywords:
+                                print(f"[GeminiEnhance] Added domain keywords: {domain_keywords}")
                         
                         return search_query
                     except:
