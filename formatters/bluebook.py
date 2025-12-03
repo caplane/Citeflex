@@ -120,7 +120,7 @@ class BluebookFormatter(BaseFormatter):
                 paren_parts.append(court)
         
         if metadata.year:
-            paren_parts.append(metadata.year)
+            paren_parts.append(str(metadata.year))
         
         if paren_parts:
             parts.append(f"({' '.join(paren_parts)}).")
@@ -201,7 +201,7 @@ class BluebookFormatter(BaseFormatter):
         if metadata.edition:
             paren_parts.append(f"{metadata.edition} ed.")
         if metadata.year:
-            paren_parts.append(metadata.year)
+            paren_parts.append(str(metadata.year))
         
         if paren_parts:
             parts.append(f"({' '.join(paren_parts)}).")
@@ -235,7 +235,7 @@ class BluebookFormatter(BaseFormatter):
         if metadata.date:
             paren_parts.append(metadata.date)
         elif metadata.year:
-            paren_parts.append(metadata.year)
+            paren_parts.append(str(metadata.year))
         
         if paren_parts:
             parts.append(f"({', '.join(paren_parts)}).")
@@ -398,3 +398,153 @@ class BluebookFormatter(BaseFormatter):
                 parts[-1] = parts[-1] + "."
         
         return " ".join(parts)
+    
+    # =========================================================================
+    # SHORT FORM METHODS - Bluebook style
+    # =========================================================================
+    
+    def format_short_legal(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Bluebook short form for legal case.
+        
+        Pattern: Case Name, Volume Reporter at Page.
+        Example: Loving, 388 U.S. at 12.
+        
+        For cases without pinpoint: Case Name, Volume Reporter.
+        Example: Loving, 388 U.S.
+        """
+        parts = []
+        
+        # Short case name (first party only) in italics
+        if m.case_name:
+            case_name = m.case_name
+            # Extract first party name for short form
+            if ' v. ' in case_name:
+                short_name = case_name.split(' v. ')[0]
+            elif ' v ' in case_name:
+                short_name = case_name.split(' v ')[0]
+            else:
+                short_name = case_name
+            parts.append(self.italicize(short_name) + ",")
+        
+        # Citation with "at" for pinpoint
+        if m.citation:
+            if page:
+                parts.append(f"{m.citation} at {page}.")
+            else:
+                parts.append(f"{m.citation}.")
+        else:
+            if parts:
+                parts[-1] = parts[-1].rstrip(',') + "."
+        
+        return " ".join(parts)
+    
+    def format_short_journal(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Bluebook short form for journal article.
+        
+        Pattern: Author, supra, at page.
+        Example: Novak, supra, at 755.
+        """
+        parts = []
+        
+        # Author last name
+        if m.authors:
+            parts.append(self.get_authors_short(m.authors, max_authors=1) + ",")
+        
+        # Supra
+        parts.append("supra")
+        
+        # Page with "at"
+        if page:
+            parts.append(f"at {page}")
+        
+        result = ", ".join(parts)
+        return result + "." if not result.endswith('.') else result
+    
+    def format_short_book(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Bluebook short form for book.
+        
+        Pattern: Author, supra, at page.
+        Example: Garner, supra, at 45.
+        """
+        parts = []
+        
+        # Author last name
+        if m.authors:
+            parts.append(self.get_authors_short(m.authors, max_authors=1) + ",")
+        
+        # Supra
+        parts.append("supra")
+        
+        # Page with "at"
+        if page:
+            parts.append(f"at {page}")
+        
+        result = ", ".join(parts)
+        return result + "." if not result.endswith('.') else result
+    
+    def format_short_interview(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Bluebook short form for interview.
+        
+        Pattern: Name Interview, supra.
+        """
+        if m.interviewee:
+            name_parts = m.interviewee.split()
+            last_name = name_parts[-1] if name_parts else m.interviewee
+            return f"{last_name} Interview, supra."
+        
+        return "Interview, supra."
+    
+    def format_short_newspaper(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Bluebook short form for newspaper.
+        
+        Pattern: Author, supra.
+        """
+        parts = []
+        
+        if m.authors:
+            parts.append(self.get_authors_short(m.authors, max_authors=1) + ",")
+        
+        parts.append("supra")
+        
+        if page:
+            parts.append(f"at {page}")
+        
+        result = ", ".join(parts)
+        return result + "." if not result.endswith('.') else result
+    
+    def format_short_government(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Bluebook short form for government document.
+        
+        Pattern: Short Title, supra, at page.
+        """
+        parts = []
+        
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            parts.append(short_title + ",")
+        
+        parts.append("supra")
+        
+        if page:
+            parts.append(f"at {page}")
+        
+        result = ", ".join(parts)
+        return result + "." if not result.endswith('.') else result
+    
+    def format_short_url(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Bluebook short form for web page.
+        
+        Pattern: Short Title, supra.
+        """
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            return f"{short_title}, supra."
+        
+        return "supra."
