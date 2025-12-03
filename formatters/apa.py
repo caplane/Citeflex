@@ -8,6 +8,7 @@ Uses <i> tags for italics (Word-compatible).
 """
 
 import re
+from typing import Optional
 from formatters.base import BaseFormatter, register_formatter
 from models import CitationMetadata, CitationStyle
 
@@ -26,6 +27,10 @@ class APAFormatter(BaseFormatter):
     - Interview: Interviewee, A. A. (Year). [Interview].
     - Newspaper: Author, A. A. (Year, Month Day). Title. Newspaper. URL
     - Government: Agency. (Year). Title. URL
+    
+    Short form patterns (for footnotes/endnotes):
+    - Author (Year, p. X)
+    - Author (Year)
     """
     
     style = CitationStyle.APA
@@ -111,7 +116,7 @@ class APAFormatter(BaseFormatter):
         if m.court and 'U.S.' not in (m.citation or ''):
             paren_parts.append(m.court)
         if m.year:
-            paren_parts.append(m.year)
+            paren_parts.append(str(m.year))
         
         parenthetical = f"({' '.join(paren_parts)})" if paren_parts else ""
         
@@ -207,3 +212,171 @@ class APAFormatter(BaseFormatter):
             parts.append(m.url)
         
         return " ".join(filter(None, parts))
+    
+    # =========================================================================
+    # SHORT FORM METHODS - APA style
+    # =========================================================================
+    
+    def format_short_journal(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        APA short form for journal article.
+        
+        Pattern: Author (Year, p. X) or Author (Year)
+        Example: Watson & Crick (1953, p. 737)
+        """
+        parts = []
+        
+        # Author last name(s)
+        if m.authors:
+            author_str = self.get_authors_short(m.authors, max_authors=2)
+            parts.append(author_str)
+        
+        # Year and optional page
+        year = m.year or 'n.d.'
+        if page:
+            parts.append(f"({year}, p. {page})")
+        else:
+            parts.append(f"({year})")
+        
+        return " ".join(parts) + "." if parts else m.raw_source or "Unknown source"
+    
+    def format_short_book(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        APA short form for book.
+        
+        Pattern: Author (Year, p. X) or Author (Year)
+        Example: Klerman (1990, p. 45)
+        """
+        parts = []
+        
+        # Author last name(s)
+        if m.authors:
+            author_str = self.get_authors_short(m.authors, max_authors=2)
+            parts.append(author_str)
+        
+        # Year and optional page
+        year = m.year or 'n.d.'
+        if page:
+            parts.append(f"({year}, p. {page})")
+        else:
+            parts.append(f"({year})")
+        
+        return " ".join(parts) + "." if parts else m.raw_source or "Unknown source"
+    
+    def format_short_legal(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        APA short form for legal case.
+        
+        APA defers to Bluebook for legal citations.
+        Pattern: Case Name (Year)
+        Example: Roe v. Wade (1973)
+        """
+        parts = []
+        
+        # Case name in italics
+        if m.case_name:
+            parts.append(self.italicize(m.case_name))
+        
+        # Year
+        if m.year:
+            parts.append(f"({m.year})")
+        
+        # Page reference if provided
+        if page and m.citation:
+            parts.append(f"at {page}")
+        
+        result = " ".join(parts)
+        return result + "." if result else m.raw_source or "Unknown source"
+    
+    def format_short_interview(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        APA short form for interview.
+        
+        Pattern: Interviewee (Year)
+        Example: Smith (2020)
+        """
+        parts = []
+        
+        if m.interviewee:
+            name_parts = m.interviewee.split()
+            last_name = name_parts[-1] if name_parts else m.interviewee
+            parts.append(last_name)
+        
+        # Extract year
+        year = m.year
+        if not year and m.date:
+            year_match = re.search(r'\d{4}', m.date)
+            if year_match:
+                year = year_match.group(0)
+        year = year or 'n.d.'
+        parts.append(f"({year})")
+        
+        return " ".join(parts) + "." if parts else "Interview."
+    
+    def format_short_newspaper(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        APA short form for newspaper.
+        
+        Pattern: Author (Year)
+        Example: Smith (2024)
+        """
+        parts = []
+        
+        if m.authors:
+            parts.append(self.get_authors_short(m.authors, max_authors=1))
+        
+        # Extract year from date if needed
+        year = m.year
+        if not year and m.date:
+            year_match = re.search(r'\d{4}', m.date)
+            if year_match:
+                year = year_match.group(0)
+        year = year or 'n.d.'
+        parts.append(f"({year})")
+        
+        return " ".join(parts) + "." if parts else m.raw_source or "Unknown source"
+    
+    def format_short_government(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        APA short form for government document.
+        
+        Pattern: Agency (Year, p. X)
+        Example: NIH (2020, p. 15)
+        """
+        parts = []
+        
+        # Short agency name or abbreviation
+        agency = m.agency or "Government"
+        # Try to extract acronym if it's a long agency name
+        if len(agency.split()) > 3:
+            # Use initials as abbreviation
+            words = agency.split()
+            acronym = ''.join(w[0].upper() for w in words if w[0].isupper() or w[0].isalpha())
+            if len(acronym) >= 2:
+                agency = acronym
+        parts.append(agency)
+        
+        year = m.year or 'n.d.'
+        if page:
+            parts.append(f"({year}, p. {page})")
+        else:
+            parts.append(f"({year})")
+        
+        return " ".join(parts) + "." if parts else m.raw_source or "Unknown source"
+    
+    def format_short_url(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        APA short form for web page.
+        
+        Pattern: "Short Title" (Year)
+        """
+        parts = []
+        
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            parts.append(f'"{short_title}"')
+        
+        year = m.year or 'n.d.'
+        parts.append(f"({year})")
+        
+        return " ".join(parts) + "." if parts else m.url or m.raw_source or "Unknown source"
