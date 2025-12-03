@@ -58,6 +58,78 @@ def _get_engine(name: str):
 # SEARCH FUNCTIONS
 # =============================================================================
 
+# -----------------------------------------------------------------------------
+# Validation helpers (must be defined before search functions that use them)
+# -----------------------------------------------------------------------------
+
+def _validate_year_match(expected_year: Optional[str], result: CitationMetadata) -> bool:
+    """
+    Validate that a search result's year matches the expected year.
+    
+    Returns True if:
+    - No expected year (can't validate)
+    - Result has no year (can't validate)
+    - Years match exactly
+    - Years are within 1 year (allow for publication delays)
+    
+    Returns False if:
+    - Years differ by more than 1 year
+    """
+    if not expected_year or not result.year:
+        return True  # Can't validate
+    
+    try:
+        expected = int(expected_year)
+        actual = int(result.year)
+        # Allow 1 year variance for publication delays
+        return abs(expected - actual) <= 1
+    except (ValueError, TypeError):
+        return True  # Can't parse, assume OK
+
+
+def _validate_author_match(original_query: str, result: CitationMetadata) -> bool:
+    """
+    Validate that a search result's author matches what was in the original query.
+    
+    If we can extract a potential author name from the query (e.g., "Woo" from 
+    "Woo master slave"), check that the result has an author with that name.
+    
+    Returns True if:
+    - No author could be extracted from query (can't validate)
+    - Author was extracted and matches a result author
+    
+    Returns False if:
+    - Author was extracted but result has no authors (suspicious)
+    - Author was extracted but doesn't match any result author
+    """
+    # Try to extract author from query (first capitalized word)
+    author_match = re.match(r'^([A-Z][a-z]+)', original_query)
+    if not author_match:
+        return True  # Can't extract author from query, assume OK
+    
+    query_author = author_match.group(1).lower()
+    
+    # If we extracted an author but result has no authors, that's suspicious
+    if not result or not result.authors:
+        print(f"[Validate] Query has author '{query_author}' but result has no authors - rejecting")
+        return False
+    
+    # Check if any result author contains this name
+    for author in result.authors:
+        if query_author in author.lower():
+            return True
+    
+    # Also check if result title contains author name (some formats put author in title)
+    if result.title and query_author in result.title.lower():
+        return True
+    
+    return False
+
+
+# -----------------------------------------------------------------------------
+# Search functions
+# -----------------------------------------------------------------------------
+
 def search_journal(query: str) -> Optional[CitationMetadata]:
     """
     Search for a journal article across multiple engines.
@@ -68,22 +140,70 @@ def search_journal(query: str) -> Optional[CitationMetadata]:
     3. OpenAlex (broad coverage)
     4. Google CSE (nuclear fallback - searches JSTOR, Scholar, etc.)
     
+    Uses multiple search strategies and validates results against query hints.
+    
     Returns first successful result.
     """
-    # Try specialized engines first
-    for engine_name in ['semantic_scholar', 'crossref', 'openalex']:
-        engine = _get_engine(engine_name)
-        if engine:
-            result = engine.search(query)
-            if result and result.has_minimum_data():
-                return result
+    # Extract year from query if present (for validation)
+    year_match = re.search(r'\b(19\d{2}|20\d{2})\b', query)
+    expected_year = year_match.group(1) if year_match else None
+    
+    # Build query variations
+    queries_to_try = []
+    
+    # Strategy 1: Add "article" or "journal" context to help disambiguate from books
+    if 'article' not in query.lower() and 'journal' not in query.lower():
+        queries_to_try.append(f"{query} article")
+    
+    # Strategy 2: Original query
+    queries_to_try.append(query)
+    
+    # Strategy 3: Remove year from query (some engines don't like year in text search)
+    if expected_year:
+        query_no_year = query.replace(expected_year, '').strip()
+        query_no_year = ' '.join(query_no_year.split())  # Clean up extra spaces
+        if query_no_year and query_no_year != query:
+            queries_to_try.append(query_no_year)
+    
+    # Try specialized engines with each query variation
+    for search_query in queries_to_try:
+        print(f"[SearchJournal] Trying: '{search_query}'")
+        
+        for engine_name in ['semantic_scholar', 'crossref', 'openalex']:
+            engine = _get_engine(engine_name)
+            if engine:
+                result = engine.search(search_query)
+                if result and result.has_minimum_data():
+                    # Validate year if we have one from the query
+                    if _validate_year_match(expected_year, result):
+                        # Also validate author
+                        if _validate_author_match(query, result):
+                            print(f"[SearchJournal] Found via {engine_name}: {result.title} ({result.year})")
+                            return result
+                        else:
+                            print(f"[SearchJournal] Skipping (author mismatch): {result.title}")
+                    else:
+                        print(f"[SearchJournal] Skipping (year mismatch, expected {expected_year}): {result.title} ({result.year})")
     
     # Fallback to Google CSE (searches JSTOR, Google Scholar, etc.)
+    # Still validate but be slightly less strict
     google_cse = _get_engine('google_cse')
     if google_cse:
-        result = google_cse.search(query)
-        if result and result.has_minimum_data():
-            return result
+        for search_query in queries_to_try[:2]:  # Only try first two variations
+            result = google_cse.search(search_query)
+            if result and result.has_minimum_data():
+                year_ok = _validate_year_match(expected_year, result) or expected_year is None
+                author_ok = _validate_author_match(query, result)
+                if year_ok and author_ok:
+                    print(f"[SearchJournal] Found via Google CSE: {result.title}")
+                    return result
+                else:
+                    reasons = []
+                    if not year_ok:
+                        reasons.append(f"year mismatch (expected {expected_year}, got {result.year})")
+                    if not author_ok:
+                        reasons.append("author mismatch")
+                    print(f"[SearchJournal] Skipping Google CSE ({', '.join(reasons)}): {result.title}")
     
     return None
 
@@ -96,6 +216,11 @@ def search_book(query: str) -> Optional[CitationMetadata]:
     1. Open Library (free, good for ISBN)
     2. Google Books (broad coverage)
     3. OpenAlex (academic books)
+    
+    Uses multiple search strategies:
+    1. Original query + "book" context
+    2. Original query alone
+    3. Query variations (fuller title if possible)
     
     Returns first successful result.
     """
@@ -120,13 +245,42 @@ def search_book(query: str) -> Optional[CitationMetadata]:
             if result and result.has_minimum_data():
                 return result
     
-    # Text search
-    for engine_name in ['google_books', 'open_library']:
-        engine = _get_engine(engine_name)
-        if engine:
-            result = engine.search(query)
-            if result and result.has_minimum_data():
-                return result
+    # Build list of query variations to try
+    queries_to_try = []
+    
+    # Strategy 1: Add "book" to help disambiguate from technical terms
+    if 'book' not in query.lower():
+        queries_to_try.append(f"{query} book")
+    
+    # Strategy 2: Original query
+    queries_to_try.append(query)
+    
+    # Strategy 3: If query looks like "Author title", try with quotes around title
+    # e.g., "Woo master slave" -> 'Woo "master slave"'
+    words = query.split()
+    if len(words) >= 2:
+        # Assume first word(s) are author, rest is title
+        # Try: Author "title words"
+        author_part = words[0]
+        title_part = " ".join(words[1:])
+        if len(title_part) > 3:  # Only if title is substantial
+            queries_to_try.append(f'{author_part} "{title_part}"')
+    
+    # Try each query variation
+    for search_query in queries_to_try:
+        print(f"[SearchBook] Trying: '{search_query}'")
+        
+        for engine_name in ['google_books', 'open_library']:
+            engine = _get_engine(engine_name)
+            if engine:
+                result = engine.search(search_query)
+                if result and result.has_minimum_data():
+                    # Validate: if we extracted an author, check it matches
+                    if _validate_author_match(query, result):
+                        print(f"[SearchBook] Found via {engine_name}: {result.title}")
+                        return result
+                    else:
+                        print(f"[SearchBook] Skipping {engine_name} result (author mismatch): {result.title}")
     
     # Try OpenAlex as fallback (sometimes has books)
     openalex = _get_engine('openalex')
