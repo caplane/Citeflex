@@ -128,8 +128,8 @@ def cite_document():
         activator = LinkActivator()
         activator.load_document(file_bytes)
         
-        # Process paragraphs (which contain citations)
-        results = activator.process_paragraphs(style=full_style, add_links=False)
+        # Process endnotes (where citations actually are)
+        results = activator.process_endnotes(style=full_style, add_links=False)
         
         # Format results for response
         citations = []
@@ -193,7 +193,7 @@ def download_document():
         file_bytes = file.read()
         activator = LinkActivator()
         activator.load_document(file_bytes)
-        activator.process_paragraphs(style=full_style, add_links=True)
+        activator.process_endnotes(style=full_style, add_links=True)
         
         # Get the modified document
         output = BytesIO()
