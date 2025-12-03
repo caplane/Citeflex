@@ -62,28 +62,28 @@ def search_journal(query: str) -> Optional[CitationMetadata]:
     """
     Search for a journal article across multiple engines.
     
-    Search order:
-    1. Semantic Scholar (author-aware)
+    Search order (optimized for finding obscure/older articles):
+    1. Google CSE FIRST (searches JSTOR, Google Scholar - best coverage)
     2. Crossref (DOI registry)
     3. OpenAlex (broad coverage)
-    4. Google CSE (nuclear fallback - searches JSTOR, Scholar, etc.)
+    4. Semantic Scholar (author-aware)
     
     Returns first successful result.
     """
-    # Try specialized engines first
-    for engine_name in ['semantic_scholar', 'crossref', 'openalex']:
-        engine = _get_engine(engine_name)
-        if engine:
-            result = engine.search(query)
-            if result and result.has_minimum_data():
-                return result
-    
-    # Fallback to Google CSE (searches JSTOR, Google Scholar, etc.)
+    # Engine 1: Google CSE FIRST (best for JSTOR, older articles, obscure sources)
     google_cse = _get_engine('google_cse')
     if google_cse:
         result = google_cse.search(query)
         if result and result.has_minimum_data():
             return result
+    
+    # Engines 2-4: Other academic engines
+    for engine_name in ['crossref', 'openalex', 'semantic_scholar']:
+        engine = _get_engine(engine_name)
+        if engine:
+            result = engine.search(query)
+            if result and result.has_minimum_data():
+                return result
     
     return None
 
