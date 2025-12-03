@@ -1,88 +1,21 @@
 """
-CiteFlex Pro - Flask Application (Interactive UI Version)
-
-Bridges the modular backend with the monolithic-style interactive UI.
-
-Endpoints:
-    GET  /          - Serve the interactive workbench UI
-    POST /upload    - Upload .docx, extract endnotes, return list
-    POST /search    - Search for candidates, return multiple results for selection
-    POST /update    - Write selected citation back to document
-    GET  /download  - Download the modified document with clickable links
-    POST /reset     - Clear session data
+CiteFlex Pro - Flask Application
+Serves the web UI and provides citation API endpoints.
 """
 
 import os
-import uuid
-import shutil
-import tempfile
-import threading
-from io import BytesIO
-from flask import Flask, render_template, request, jsonify, send_file, session
+from flask import Flask, render_template, request, jsonify
+from werkzeug.utils import secure_filename
 
+# Import CiteFlex components
 from models import CitationMetadata, CitationType, CitationStyle
-from router import search_all_sources, route_and_search
-from formatters import format_citation, get_formatter
-from document_processor import WordDocumentProcessor, LinkActivator
-
+from detectors import detect_type
+from extractors import extract_interview, extract_newspaper, extract_government, extract_url
+from router import route_and_search, search_legal, search_all_sources, get_citation_candidates
+from formatters import get_formatter
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'citeflex-modular-v2')
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
-
-# In-memory storage for user sessions
-USER_DATA_STORE = {}
-FILE_LOCK = threading.Lock()
-
-
-# =============================================================================
-# SESSION HELPERS
-# =============================================================================
-
-def get_user_data():
-    """Get current user's session data."""
-    if 'user_id' not in session:
-        session['user_id'] = str(uuid.uuid4())
-    return USER_DATA_STORE.get(session['user_id'])
-
-
-def set_user_data(data):
-    """Store data for current user session."""
-    if 'user_id' not in session:
-        session['user_id'] = str(uuid.uuid4())
-    USER_DATA_STORE[session['user_id']] = data
-
-
-def clear_user_data():
-    """Clear current user's session data."""
-    user_id = session.get('user_id')
-    if user_id and user_id in USER_DATA_STORE:
-        data = USER_DATA_STORE.pop(user_id)
-        # Clean up temp directory
-        if data and 'temp_dir' in data:
-            shutil.rmtree(data['temp_dir'], ignore_errors=True)
-
-
-# =============================================================================
-# STYLE MAPPING
-# =============================================================================
-
-STYLE_MAP = {
-    'chicago': CitationStyle.CHICAGO,
-    'apa': CitationStyle.APA,
-    'mla': CitationStyle.MLA,
-    'bluebook': CitationStyle.BLUEBOOK,
-    'oscola': CitationStyle.OSCOLA,
-}
-
-STYLE_NAMES = {
-    'chicago': 'Chicago Manual of Style',
-    'apa': 'APA 7',
-    'mla': 'MLA 9',
-    'bluebook': 'Bluebook',
-    'oscola': 'OSCOLA',
-}
-
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # =============================================================================
 # ROUTES
@@ -90,257 +23,376 @@ STYLE_NAMES = {
 
 @app.route('/')
 def index():
-    """Serve the interactive workbench UI."""
+    """Serve the main UI."""
     return render_template('index.html')
 
 
-@app.route('/upload', methods=['POST'])
-def upload():
+@app.route('/api/cite', methods=['POST'])
+def cite():
     """
-    Upload a Word document and extract endnotes/footnotes.
+    Main citation endpoint - returns single best result.
     
-    Returns:
-        JSON: {success: bool, endnotes: [{id, text}, ...], error?: string}
+    Request JSON:
+        {
+            "query": "Loving v. Virginia",
+            "style": "Chicago"
+        }
+    
+    Response JSON:
+        {
+            "success": true,
+            "citation": "<em>Loving v. Virginia</em>, 388 U.S. 1 (1967).",
+            "type": "legal",
+            "metadata": { ... }
+        }
     """
-    if 'file' not in request.files:
-        return jsonify({'success': False, 'error': 'No file provided'}), 400
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'success': False, 'error': 'No file selected'}), 400
-    
-    if not file.filename.endswith('.docx'):
-        return jsonify({'success': False, 'error': 'Only .docx files supported'}), 400
-    
     try:
-        # Clear any previous session data
-        clear_user_data()
+        data = request.get_json()
+        query = data.get('query', '').strip()
+        style = data.get('style', 'Chicago')
         
-        # Create temp directory for this session
-        temp_dir = tempfile.mkdtemp()
+        if not query:
+            return jsonify({
+                'success': False,
+                'error': 'No query provided'
+            }), 400
         
-        # Save uploaded file
-        file_bytes = file.read()
-        original_filename = file.filename
-        temp_path = os.path.join(temp_dir, original_filename)
+        # Get citation
+        metadata, citation = get_citation(query, style)
         
-        with open(temp_path, 'wb') as f:
-            f.write(file_bytes)
-        
-        # Extract endnotes using WordDocumentProcessor
-        processor = WordDocumentProcessor(BytesIO(file_bytes))
-        endnotes = processor.get_endnotes()
-        footnotes = processor.get_footnotes()
-        
-        # Combine endnotes and footnotes, marking which is which
-        all_notes = []
-        for note in endnotes:
-            all_notes.append({
-                'id': note['id'],
-                'text': note['text'],
-                'type': 'endnote'
+        if metadata and citation:
+            return jsonify({
+                'success': True,
+                'citation': citation,
+                'type': metadata.citation_type.name.lower(),
+                'metadata': metadata.to_dict() if hasattr(metadata, 'to_dict') else {}
             })
-        for note in footnotes:
-            all_notes.append({
-                'id': f"fn_{note['id']}",  # Prefix to distinguish from endnotes
-                'text': note['text'],
-                'type': 'footnote'
-            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Could not generate citation',
+                'query': query
+            }), 404
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/cite/candidates', methods=['POST'])
+def cite_candidates():
+    """
+    Get multiple citation candidates for user selection.
+    
+    This powers the "PROPOSED RESOLUTIONS" panel.
+    TYPE-AWARE: Routes legal queries to legal engine, journal queries to academic engines, etc.
+    
+    Request JSON:
+        {
+            "query": "Roe v Wade",
+            "style": "Chicago",
+            "max_results": 5
+        }
+    
+    Response JSON:
+        {
+            "success": true,
+            "detected_type": "legal",
+            "candidates": [
+                {
+                    "formatted": "<i>Roe v. Wade</i>, 410 U.S. 113 (1973).",
+                    "source_engine": "Famous Cases Cache",
+                    "type": "legal",
+                    "metadata": { ... }
+                },
+                ...
+            ]
+        }
+    """
+    try:
+        data = request.get_json()
+        query = data.get('query', '').strip()
+        style = data.get('style', 'Chicago')
+        max_results = data.get('max_results', 5)
         
-        # Store session data
-        set_user_data({
-            'temp_dir': temp_dir,
-            'original_filename': original_filename,
-            'file_bytes': file_bytes,
-            'processor_temp_dir': processor.temp_dir,
-            'notes': all_notes,
-        })
+        if not query:
+            return jsonify({
+                'success': False,
+                'error': 'No query provided'
+            }), 400
+        
+        # Map style names
+        style_map = {
+            'Chicago': 'Chicago Manual of Style',
+            'APA': 'APA 7',
+            'MLA': 'MLA 9',
+            'Bluebook': 'Bluebook',
+            'OSCOLA': 'OSCOLA'
+        }
+        full_style = style_map.get(style, style)
+        
+        # Detect type first (for logging/debugging)
+        detection = detect_type(query)
+        detected_type = detection.citation_type.name.lower()
+        
+        # Get candidates (type-aware search)
+        candidates = get_citation_candidates(query, full_style, max_results)
         
         return jsonify({
             'success': True,
-            'endnotes': all_notes,
-            'count': len(all_notes)
+            'detected_type': detected_type,
+            'confidence': detection.confidence,
+            'candidates': candidates
         })
         
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
-@app.route('/search', methods=['POST'])
-def search():
+@app.route('/api/cite/document', methods=['POST'])
+def cite_document():
     """
-    Search for citation candidates across multiple engines.
-    
-    Request JSON:
-        {text: string, style: string}
-    
-    Returns:
-        JSON: {results: [{formatted, source, confidence, type}, ...]}
+    Process a Word document and format all citations.
     """
     try:
-        data = request.get_json()
-        text = data.get('text', '').strip()
-        style_key = data.get('style', 'chicago').lower()
+        if 'file' not in request.files:
+            return jsonify({
+                'success': False,
+                'error': 'No file provided'
+            }), 400
         
-        if not text:
-            return jsonify({'results': []})
+        file = request.files['file']
+        style = request.form.get('style', 'Chicago')
         
-        # Get citation style
-        citation_style = STYLE_MAP.get(style_key, CitationStyle.CHICAGO)
-        formatter = get_formatter(citation_style)
+        if not file.filename.endswith('.docx'):
+            return jsonify({
+                'success': False,
+                'error': 'Only .docx files are supported'
+            }), 400
         
-        # Search for candidates using modular search
-        candidates = search_all_sources(text, max_results=5)
+        # Map style names
+        style_map = {
+            'Chicago': 'Chicago Manual of Style',
+            'APA': 'APA 7',
+            'MLA': 'MLA 9',
+            'Bluebook': 'Bluebook',
+            'OSCOLA': 'OSCOLA'
+        }
+        full_style = style_map.get(style, style)
         
-        # If no candidates from search_all_sources, try route_and_search for single result
-        if not candidates:
-            single_result = route_and_search(text)
-            if single_result and single_result.has_minimum_data():
-                candidates = [single_result]
+        # Process the document using the new processor
+        from document_processor import process_document
         
-        # Format results for the frontend
-        results = []
-        for metadata in candidates:
-            try:
-                formatted = formatter.format(metadata)
-                
-                # Determine confidence level
-                confidence = 'high' if metadata.doi or metadata.pmid else 'medium'
-                if metadata.confidence < 0.5:
-                    confidence = 'low'
-                
-                results.append({
-                    'formatted': formatted,
-                    'source': metadata.source_engine or 'Unknown',
-                    'confidence': confidence,
-                    'type': metadata.citation_type.name.lower()
-                })
-            except Exception as e:
-                print(f"[Search] Error formatting result: {e}")
-                continue
+        # Read file bytes
+        file_bytes = file.read()
         
-        # If still no results, return the original text as fallback
-        if not results:
-            results.append({
-                'formatted': text,
-                'source': 'No Match Found',
-                'confidence': 'low',
-                'type': 'unknown'
+        # Process document (preview mode - don't need the doc back, just results)
+        _, results = process_document(file_bytes, style=full_style, add_links=False)
+        
+        # Format results for response
+        citations = []
+        for r in results:
+            citations.append({
+                'original': r.original,
+                'formatted': r.formatted,
+                'type': r.metadata.citation_type.name.lower() if r.metadata else 'unknown',
+                'success': r.success
             })
         
-        return jsonify({'results': results})
+        success_count = sum(1 for r in results if r.success)
+        
+        return jsonify({
+            'success': True,
+            'count': success_count,
+            'total': len(results),
+            'citations': citations,
+            'message': f'{success_count} of {len(results)} citations formatted'
+        })
         
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'results': []}), 500
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
-@app.route('/update', methods=['POST'])
-def update():
+@app.route('/api/cite/document/download', methods=['POST'])
+def download_document():
     """
-    Write a selected citation back to the document.
-    
-    Request JSON:
-        {id: string, html: string}
-    
-    Returns:
-        JSON: {success: bool, error?: string}
+    Process a Word document and return the formatted version for download.
     """
-    user_data = get_user_data()
-    if not user_data:
-        return jsonify({'success': False, 'error': 'Session expired'}), 400
-    
     try:
-        data = request.get_json()
-        note_id = data.get('id')
-        new_content = data.get('html', '')
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file provided'}), 400
         
-        if not note_id:
-            return jsonify({'success': False, 'error': 'No note ID provided'}), 400
+        file = request.files['file']
+        style = request.form.get('style', 'Chicago')
         
-        with FILE_LOCK:
-            # Reload processor from stored bytes
-            processor = WordDocumentProcessor(BytesIO(user_data['file_bytes']))
-            
-            # Check if this is a footnote (prefixed with fn_)
-            if note_id.startswith('fn_'):
-                actual_id = note_id[3:]  # Remove 'fn_' prefix
-                success = processor.write_footnote(actual_id, new_content)
-            else:
-                success = processor.write_endnote(note_id, new_content)
-            
-            if success:
-                # Save updated document back to session
-                buffer = processor.save_to_buffer()
-                user_data['file_bytes'] = buffer.read()
-                processor.cleanup()
-                
-                return jsonify({'success': True})
-            else:
-                processor.cleanup()
-                return jsonify({'success': False, 'error': 'Failed to update note'}), 500
-                
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@app.route('/download')
-def download():
-    """
-    Download the modified document with clickable hyperlinks.
-    
-    Returns:
-        The processed .docx file as an attachment
-    """
-    user_data = get_user_data()
-    if not user_data:
-        return "Session expired", 400
-    
-    try:
-        # Get the modified document bytes
-        file_bytes = user_data.get('file_bytes')
-        if not file_bytes:
-            return "No document found", 400
+        if not file.filename.endswith('.docx'):
+            return jsonify({'success': False, 'error': 'Only .docx files supported'}), 400
         
-        # Apply LinkActivator to make URLs clickable
-        doc_buffer = BytesIO(file_bytes)
-        activated_buffer = LinkActivator.process(doc_buffer)
+        style_map = {
+            'Chicago': 'Chicago Manual of Style',
+            'APA': 'APA 7',
+            'MLA': 'MLA 9',
+            'Bluebook': 'Bluebook',
+            'OSCOLA': 'OSCOLA'
+        }
+        full_style = style_map.get(style, style)
         
-        # Generate output filename
-        original_name = user_data.get('original_filename', 'document.docx')
-        name_without_ext = os.path.splitext(original_name)[0]
-        output_name = f"Resolved_{name_without_ext}.docx"
+        from document_processor import process_document
+        from io import BytesIO
         
+        file_bytes = file.read()
+        
+        # Process document (with clickable links)
+        doc_bytes, _ = process_document(file_bytes, style=full_style, add_links=True)
+        
+        # Return the modified document
+        output = BytesIO(doc_bytes)
+        
+        from flask import send_file
         return send_file(
-            activated_buffer,
+            output,
             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             as_attachment=True,
-            download_name=output_name
+            download_name=f'formatted_{file.filename}'
         )
         
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return f"Error: {str(e)}", 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@app.route('/reset', methods=['POST'])
-def reset():
-    """Clear session and remove temporary files."""
-    clear_user_data()
-    session.clear()
-    return jsonify({'success': True})
+@app.route('/api/detect', methods=['POST'])
+def detect():
+    """
+    Detect citation type without searching.
+    Useful for UI to show what type was detected.
+    
+    Request JSON:
+        {"query": "Roe v. Wade"}
+    
+    Response JSON:
+        {
+            "type": "legal",
+            "confidence": 0.9
+        }
+    """
+    try:
+        data = request.get_json()
+        query = data.get('query', '').strip()
+        
+        if not query:
+            return jsonify({'type': 'unknown', 'confidence': 0})
+        
+        detection = detect_type(query)
+        
+        return jsonify({
+            'type': detection.citation_type.name.lower(),
+            'confidence': detection.confidence
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'type': 'unknown',
+            'confidence': 0,
+            'error': str(e)
+        })
 
 
-@app.route('/health')
+@app.route('/api/styles', methods=['GET'])
+def get_styles():
+    """Return available citation styles."""
+    return jsonify({
+        'styles': ['Chicago', 'APA', 'MLA', 'Bluebook', 'OSCOLA']
+    })
+
+
+@app.route('/health', methods=['GET'])
 def health():
-    """Health check endpoint for Railway/deployment."""
-    return jsonify({'status': 'healthy', 'version': '2.0-modular'})
+    """Health check endpoint."""
+    return jsonify({'status': 'healthy'})
+
+
+# =============================================================================
+# CITATION LOGIC
+# =============================================================================
+
+def get_citation(query: str, style: str = "Chicago") -> tuple:
+    """
+    Main entry point: detect type, fetch metadata, format citation.
+    """
+    if not query or not query.strip():
+        return None, ""
+    
+    query = query.strip()
+    
+    # Map short style names to full names
+    style_map = {
+        'Chicago': 'Chicago Manual of Style',
+        'APA': 'APA 7',
+        'MLA': 'MLA 9',
+        'Bluebook': 'Bluebook',
+        'OSCOLA': 'OSCOLA'
+    }
+    full_style = style_map.get(style, style)
+    
+    # Step 1: Detect citation type
+    detection = detect_type(query)
+    citation_type = detection.citation_type
+    
+    # Step 2: Get metadata based on type
+    metadata = None
+    
+    if citation_type == CitationType.INTERVIEW:
+        metadata = extract_interview(query)
+    
+    elif citation_type == CitationType.NEWSPAPER:
+        metadata = extract_newspaper(query)
+    
+    elif citation_type == CitationType.GOVERNMENT:
+        metadata = extract_government(query)
+    
+    elif citation_type == CitationType.URL:
+        metadata = extract_url(query)
+    
+    elif citation_type == CitationType.LEGAL:
+        metadata = search_legal(query)
+        if not metadata:
+            metadata = CitationMetadata(
+                citation_type=CitationType.LEGAL,
+                case_name=query,
+                raw_source=query
+            )
+    
+    else:
+        # JOURNAL, BOOK, MEDICAL - try API search
+        metadata = route_and_search(query)
+        if not metadata:
+            metadata = CitationMetadata(
+                citation_type=citation_type,
+                title=query,
+                raw_source=query
+            )
+    
+    # Step 3: Format the citation
+    if metadata:
+        formatter = get_formatter(full_style)
+        citation = formatter.format(metadata)
+        return metadata, citation
+    
+    return None, ""
 
 
 # =============================================================================
@@ -348,10 +400,6 @@ def health():
 # =============================================================================
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
+    port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('DEBUG', 'false').lower() == 'true'
-    
-    print(f"CiteFlex Pro v2.0 (Modular + Interactive UI)")
-    print(f"Running on http://localhost:{port}")
-    
     app.run(host='0.0.0.0', port=port, debug=debug)
