@@ -24,6 +24,76 @@ from dataclasses import dataclass
 from io import BytesIO
 
 from router import get_citation
+from formatters.base import BaseFormatter
+
+
+# =============================================================================
+# IBID DETECTION AND HANDLING
+# =============================================================================
+
+# Pattern to match ibid variations
+# Matches: ibid, ibid., Ibid, Ibid., IBID, IBID., ibidem, etc.
+# Optionally followed by comma/period and page number
+IBID_PATTERN = re.compile(
+    r'^(?:ibid\.?|ibidem\.?)(?:\s*[,.]?\s*(\d+[\-–]?\d*)?)?\.?$',
+    re.IGNORECASE
+)
+
+
+def is_ibid(text: str) -> bool:
+    """
+    Check if the text is an ibid reference.
+    
+    Recognizes variations:
+    - ibid
+    - ibid.
+    - Ibid
+    - Ibid.
+    - IBID
+    - ibidem
+    - ibid, 45
+    - ibid., 45
+    - ibid. 123-125
+    
+    Args:
+        text: The citation text to check
+        
+    Returns:
+        True if this is an ibid reference
+    """
+    if not text:
+        return False
+    
+    cleaned = text.strip()
+    return IBID_PATTERN.match(cleaned) is not None
+
+
+def extract_ibid_page(text: str) -> Optional[str]:
+    """
+    Extract page number from an ibid reference.
+    
+    Examples:
+    - "ibid, 45" → "45"
+    - "ibid., 123-125" → "123-125"
+    - "ibid." → None
+    - "ibid" → None
+    
+    Args:
+        text: The ibid text
+        
+    Returns:
+        Page number string if present, None otherwise
+    """
+    if not text:
+        return None
+    
+    cleaned = text.strip()
+    match = IBID_PATTERN.match(cleaned)
+    
+    if match and match.group(1):
+        return match.group(1).strip()
+    
+    return None
 
 
 @dataclass
@@ -507,6 +577,9 @@ def process_document(
     """
     Process all citations in a Word document.
     
+    Handles ibid references by tracking the previous citation and outputting
+    "ibid." or "ibid., [page]" as appropriate.
+    
     Args:
         file_bytes: The document as bytes
         style: Citation style to use
@@ -517,6 +590,10 @@ def process_document(
     """
     results = []
     
+    # Track previous citation for ibid handling
+    previous_citation_metadata = None
+    previous_citation_formatted = None
+    
     # Load document
     processor = WordDocumentProcessor(BytesIO(file_bytes))
     
@@ -524,83 +601,114 @@ def process_document(
     endnotes = processor.get_endnotes()
     footnotes = processor.get_footnotes()
     
-    # Process endnotes
-    for note in endnotes:
+    def process_single_note(note: Dict[str, str], note_type: str) -> ProcessedCitation:
+        """
+        Process a single endnote or footnote.
+        
+        Handles ibid detection and maintains state for previous citation.
+        
+        Args:
+            note: Dict with 'id' and 'text' keys
+            note_type: Either 'endnote' or 'footnote'
+            
+        Returns:
+            ProcessedCitation result
+        """
+        nonlocal previous_citation_metadata, previous_citation_formatted
+        
         note_id = note['id']
         original_text = note['text']
         
         try:
+            # Check if this is an ibid reference
+            if is_ibid(original_text):
+                # Handle ibid
+                if previous_citation_metadata is None:
+                    # Ibid without a previous citation - can't resolve
+                    print(f"[process_document] Warning: ibid in {note_type} {note_id} but no previous citation")
+                    return ProcessedCitation(
+                        original=original_text,
+                        formatted=original_text,
+                        metadata=None,
+                        url=None,
+                        success=False,
+                        error="ibid reference but no previous citation found"
+                    )
+                
+                # Extract page number if present
+                page = extract_ibid_page(original_text)
+                
+                # Format as ibid
+                formatted = BaseFormatter.format_ibid(page)
+                
+                # Write the formatted ibid back
+                if note_type == 'endnote':
+                    processor.write_endnote(note_id, formatted)
+                else:
+                    processor.write_footnote(note_id, formatted)
+                
+                # Note: previous_citation stays the same (ibid refers to it)
+                return ProcessedCitation(
+                    original=original_text,
+                    formatted=formatted,
+                    metadata=previous_citation_metadata,  # Same source as previous
+                    url=previous_citation_metadata.url if hasattr(previous_citation_metadata, 'url') else None,
+                    success=True
+                )
+            
+            # Not ibid - process normally
             metadata, formatted = get_citation(original_text, style)
             
             if metadata and formatted:
                 # Write the formatted citation back
-                processor.write_endnote(note_id, formatted)
+                if note_type == 'endnote':
+                    processor.write_endnote(note_id, formatted)
+                else:
+                    processor.write_footnote(note_id, formatted)
                 
-                results.append(ProcessedCitation(
+                # Update previous citation for future ibid references
+                previous_citation_metadata = metadata
+                previous_citation_formatted = formatted
+                
+                return ProcessedCitation(
                     original=original_text,
                     formatted=formatted,
                     metadata=metadata,
                     url=metadata.url if hasattr(metadata, 'url') else None,
                     success=True
-                ))
+                )
             else:
-                results.append(ProcessedCitation(
+                return ProcessedCitation(
                     original=original_text,
                     formatted=original_text,
                     metadata=None,
                     url=None,
                     success=False,
                     error="No metadata found"
-                ))
+                )
+                
         except Exception as e:
-            print(f"[process_document] Error processing endnote {note_id}: {e}")
-            results.append(ProcessedCitation(
+            print(f"[process_document] Error processing {note_type} {note_id}: {e}")
+            return ProcessedCitation(
                 original=original_text,
                 formatted=original_text,
                 metadata=None,
                 url=None,
                 success=False,
                 error=str(e)
-            ))
+            )
     
-    # Process footnotes
+    # Process endnotes (in order - important for ibid tracking)
+    for note in endnotes:
+        result = process_single_note(note, 'endnote')
+        results.append(result)
+    
+    # Process footnotes (in order - important for ibid tracking)
+    # Note: We continue tracking from endnotes, which may or may not be desired
+    # If footnotes should have separate ibid tracking, reset previous_citation_metadata here
     for note in footnotes:
-        note_id = note['id']
-        original_text = note['text']
-        
-        try:
-            metadata, formatted = get_citation(original_text, style)
-            
-            if metadata and formatted:
-                # Write the formatted citation back
-                processor.write_footnote(note_id, formatted)
-                
-                results.append(ProcessedCitation(
-                    original=original_text,
-                    formatted=formatted,
-                    metadata=metadata,
-                    url=metadata.url if hasattr(metadata, 'url') else None,
-                    success=True
-                ))
-            else:
-                results.append(ProcessedCitation(
-                    original=original_text,
-                    formatted=original_text,
-                    metadata=None,
-                    url=None,
-                    success=False,
-                    error="No metadata found"
-                ))
-        except Exception as e:
-            print(f"[process_document] Error processing footnote {note_id}: {e}")
-            results.append(ProcessedCitation(
-                original=original_text,
-                formatted=original_text,
-                metadata=None,
-                url=None,
-                success=False,
-                error=str(e)
-            ))
+        result = process_single_note(note, 'footnote')
+        results.append(result)
     
     # Save to buffer
     doc_buffer = processor.save_to_buffer()
