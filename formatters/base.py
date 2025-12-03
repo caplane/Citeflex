@@ -44,7 +44,7 @@ class BaseFormatter(ABC):
         return self.format_generic(metadata)
     
     # =========================================================================
-    # IBID SUPPORT
+    # IBID FORMATTING - Universal across all styles
     # =========================================================================
     
     @staticmethod
@@ -73,6 +73,149 @@ class BaseFormatter(ABC):
         else:
             # Same source, same page (or page not specified)
             return "ibid."
+    
+    # =========================================================================
+    # SHORT FORM FORMATTING - Style-specific implementations
+    # =========================================================================
+    
+    def format_short(self, metadata: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Format a short form citation for subsequent references.
+        
+        Short form is used when citing a source that has been cited before
+        in the document, but not immediately preceding (which would use ibid).
+        
+        Each style has different conventions for short forms:
+        - Chicago: Author, "Short Title," page.
+        - Bluebook: Case Name at page. / Author, supra, at page.
+        - OSCOLA: Author (n X) page. / Short case name (n X).
+        - MLA: Author page.
+        - APA: Author (Year) or page reference.
+        
+        This base implementation provides a generic fallback.
+        Subclasses should override for style-specific formatting.
+        
+        Args:
+            metadata: The citation metadata
+            page: Optional page number for pinpoint reference
+            
+        Returns:
+            Formatted short form citation string
+        """
+        # Route by citation type for short form
+        short_formatters = {
+            CitationType.JOURNAL: self.format_short_journal,
+            CitationType.BOOK: self.format_short_book,
+            CitationType.LEGAL: self.format_short_legal,
+            CitationType.INTERVIEW: self.format_short_interview,
+            CitationType.NEWSPAPER: self.format_short_newspaper,
+            CitationType.GOVERNMENT: self.format_short_government,
+            CitationType.MEDICAL: self.format_short_journal,  # Same as journal
+            CitationType.URL: self.format_short_url,
+        }
+        
+        formatter = short_formatters.get(metadata.citation_type)
+        if formatter:
+            return formatter(metadata, page)
+        
+        # Generic fallback
+        return self.format_short_generic(metadata, page)
+    
+    def format_short_journal(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """Format short form for journal article. Override in subclasses."""
+        return self._default_short_form(m, page)
+    
+    def format_short_book(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """Format short form for book. Override in subclasses."""
+        return self._default_short_form(m, page)
+    
+    def format_short_legal(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """Format short form for legal case. Override in subclasses."""
+        return self._default_short_form(m, page)
+    
+    def format_short_interview(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """Format short form for interview. Override in subclasses."""
+        return self._default_short_form(m, page)
+    
+    def format_short_newspaper(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """Format short form for newspaper. Override in subclasses."""
+        return self._default_short_form(m, page)
+    
+    def format_short_government(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """Format short form for government document. Override in subclasses."""
+        return self._default_short_form(m, page)
+    
+    def format_short_url(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """Format short form for URL/web page. Override in subclasses."""
+        return self._default_short_form(m, page)
+    
+    def format_short_generic(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """Format short form for unknown types. Override in subclasses."""
+        return self._default_short_form(m, page)
+    
+    def _default_short_form(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Default short form implementation.
+        
+        Uses first author's last name + short title.
+        """
+        parts = []
+        
+        # First author's last name
+        if m.authors:
+            first_author = m.authors[0]
+            name_parts = first_author.split()
+            if name_parts:
+                parts.append(name_parts[-1])  # Last name
+        
+        # Short title
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            parts.append(self.italicize(short_title))
+        
+        result = ", ".join(parts)
+        
+        # Add page if provided
+        if page:
+            result += f", {page}"
+        
+        return result + "." if result else m.raw_source or "Unknown source"
+    
+    @staticmethod
+    def _get_short_title(title: Optional[str], max_words: int = 4) -> str:
+        """
+        Generate a short title from a full title.
+        
+        Rules:
+        - Use first 4 words (or fewer if title is short)
+        - Omit initial articles (A, An, The)
+        - End with ellipsis if truncated (optional - style dependent)
+        
+        Args:
+            title: The full title
+            max_words: Maximum words to include (default 4)
+            
+        Returns:
+            Shortened title string
+        """
+        if not title:
+            return ""
+        
+        words = title.split()
+        
+        # Remove leading articles
+        articles = {'a', 'an', 'the'}
+        while words and words[0].lower() in articles:
+            words = words[1:]
+        
+        if not words:
+            return title  # Return original if nothing left
+        
+        # Take first N words
+        if len(words) <= max_words:
+            return " ".join(words)
+        
+        return " ".join(words[:max_words])
     
     # =========================================================================
     # ABSTRACT METHODS - Must be implemented by each style
@@ -188,6 +331,52 @@ class BaseFormatter(ABC):
                 return f"{authors[0]} and {authors[1]}"
             else:
                 return f"{authors[0]} et al."
+    
+    @staticmethod
+    def get_author_last_name(author: str) -> str:
+        """
+        Extract last name from an author name.
+        
+        Args:
+            author: Full author name (e.g., "James Watson")
+            
+        Returns:
+            Last name (e.g., "Watson")
+        """
+        if not author:
+            return ""
+        parts = author.strip().split()
+        return parts[-1] if parts else ""
+    
+    @staticmethod
+    def get_authors_short(authors: List[str], max_authors: int = 1) -> str:
+        """
+        Get shortened author string for short form citations.
+        
+        Args:
+            authors: List of author names
+            max_authors: Max authors to include before "et al."
+            
+        Returns:
+            Shortened author string (last names only)
+        """
+        if not authors:
+            return ""
+        
+        last_names = []
+        for author in authors[:max_authors]:
+            parts = author.strip().split()
+            if parts:
+                last_names.append(parts[-1])
+        
+        if len(authors) > max_authors:
+            return last_names[0] + " et al." if last_names else ""
+        elif len(last_names) == 1:
+            return last_names[0]
+        elif len(last_names) == 2:
+            return f"{last_names[0]} and {last_names[1]}"
+        else:
+            return ", ".join(last_names[:-1]) + f", and {last_names[-1]}"
     
     @staticmethod
     def italicize(text: str) -> str:
