@@ -98,6 +98,12 @@ def is_legal(text: str) -> bool:
         return False
     clean = text.strip()
     
+    # Exclude Federal Register patterns (these are government, not legal)
+    if re.search(r'\b\d+\s*FR\s+\d+\b', clean, re.IGNORECASE):
+        return False
+    if re.search(r'\bfederal\s+register\b', clean, re.IGNORECASE):
+        return False
+    
     # UK neutral citation pattern: [2024] UKSC 123
     if '[' in clean and ']' in clean:
         if re.search(r'\[\d{4}\]', clean):
@@ -137,17 +143,58 @@ def is_legal(text: str) -> bool:
 
 def is_newspaper(text: str) -> bool:
     """
-    Detect newspaper/magazine article URLs.
+    Detect newspaper/magazine article citations.
     
-    Only triggers for URLs from known newspaper domains.
+    Triggers:
+    - URLs from known newspaper domains
+    - Newspaper names in text
     """
-    if not is_url(text):
+    if not text:
         return False
-    try:
-        domain = urlparse(text).netloc.lower().replace('www.', '')
-        return any(nd in domain for nd in NEWSPAPER_DOMAINS)
-    except:
-        return False
+    
+    clean = text.strip()
+    lower = clean.lower()
+    
+    # Check for URL to newspaper
+    if is_url(clean):
+        try:
+            domain = urlparse(clean).netloc.lower().replace('www.', '')
+            if any(nd in domain for nd in NEWSPAPER_DOMAINS):
+                return True
+        except:
+            pass
+    
+    # Check for newspaper names in text
+    newspaper_names = [
+        'new york times',
+        'wall street journal',
+        'washington post',
+        'los angeles times',
+        'chicago tribune',
+        'boston globe',
+        'the guardian',
+        'the economist',
+        'financial times',
+        'usa today',
+        'atlantic',
+        'new yorker',
+        'politico',
+        'huffington post',
+        'huffpost',
+        'buzzfeed',
+        'daily beast',
+        'slate',
+        'vox',
+        'reuters',
+        'associated press',
+        'ap news',
+    ]
+    
+    for name in newspaper_names:
+        if name in lower:
+            return True
+    
+    return False
 
 
 def is_government(text: str) -> bool:

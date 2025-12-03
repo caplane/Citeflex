@@ -160,6 +160,60 @@ def cite_document():
         }), 500
 
 
+@app.route('/api/cite/document/download', methods=['POST'])
+def download_document():
+    """
+    Process a Word document and return the formatted version for download.
+    """
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        style = request.form.get('style', 'Chicago')
+        
+        if not file.filename.endswith('.docx'):
+            return jsonify({'success': False, 'error': 'Only .docx files supported'}), 400
+        
+        style_map = {
+            'Chicago': 'Chicago Manual of Style',
+            'APA': 'APA 7',
+            'MLA': 'MLA 9',
+            'Bluebook': 'Bluebook',
+            'OSCOLA': 'OSCOLA'
+        }
+        full_style = style_map.get(style, style)
+        
+        from document_processor import LinkActivator, DOCX_AVAILABLE
+        from io import BytesIO
+        
+        if not DOCX_AVAILABLE:
+            return jsonify({'success': False, 'error': 'python-docx not installed'}), 500
+        
+        file_bytes = file.read()
+        activator = LinkActivator()
+        activator.load_document(file_bytes)
+        activator.process_paragraphs(style=full_style, add_links=True)
+        
+        # Get the modified document
+        output = BytesIO()
+        activator.save_document(output)
+        output.seek(0)
+        
+        from flask import send_file
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            as_attachment=True,
+            download_name=f'formatted_{file.filename}'
+        )
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/styles', methods=['GET'])
 def get_styles():
     """Return available citation styles."""
