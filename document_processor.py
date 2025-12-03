@@ -96,6 +96,60 @@ def extract_ibid_page(text: str) -> Optional[str]:
     return None
 
 
+def normalize_url(url: str) -> str:
+    """
+    Normalize a URL for comparison purposes.
+    
+    Removes trailing slashes, converts to lowercase, strips whitespace,
+    and removes common tracking parameters to ensure matching URLs
+    are recognized as the same source.
+    
+    Args:
+        url: The URL to normalize
+        
+    Returns:
+        Normalized URL string
+    """
+    if not url:
+        return ""
+    
+    # Strip whitespace and convert to lowercase
+    normalized = url.strip().lower()
+    
+    # Remove trailing slashes
+    normalized = normalized.rstrip('/')
+    
+    # Remove common tracking parameters (utm_, etc.)
+    # Simple approach: remove everything after ? for comparison
+    # This may be too aggressive for some URLs, but works for most cases
+    if '?' in normalized:
+        base_url = normalized.split('?')[0]
+        # Keep the base URL without query params for comparison
+        normalized = base_url
+    
+    return normalized
+
+
+def urls_match(url1: Optional[str], url2: Optional[str]) -> bool:
+    """
+    Check if two URLs refer to the same source.
+    
+    Uses normalized comparison to handle minor variations like
+    trailing slashes, case differences, and tracking parameters.
+    
+    Args:
+        url1: First URL
+        url2: Second URL
+        
+    Returns:
+        True if both URLs are non-empty and match after normalization
+    """
+    if not url1 or not url2:
+        return False
+    
+    return normalize_url(url1) == normalize_url(url2)
+
+
 @dataclass
 class ProcessedCitation:
     """Result of processing a single citation."""
@@ -580,6 +634,9 @@ def process_document(
     Handles ibid references by tracking the previous citation and outputting
     "ibid." or "ibid., [page]" as appropriate.
     
+    Also handles repetitive URLs: if the same URL appears in consecutive notes,
+    the subsequent note is formatted as "ibid." instead of repeating the full citation.
+    
     Args:
         file_bytes: The document as bytes
         style: Citation style to use
@@ -593,6 +650,7 @@ def process_document(
     # Track previous citation for ibid handling
     previous_citation_metadata = None
     previous_citation_formatted = None
+    previous_citation_url = None  # Track URL separately for URL matching
     
     # Load document
     processor = WordDocumentProcessor(BytesIO(file_bytes))
@@ -605,7 +663,10 @@ def process_document(
         """
         Process a single endnote or footnote.
         
-        Handles ibid detection and maintains state for previous citation.
+        Handles:
+        1. Explicit ibid references (user typed "ibid" or "ibid., 45")
+        2. Repetitive URLs (same URL as previous note → output "ibid.")
+        3. Normal citations
         
         Args:
             note: Dict with 'id' and 'text' keys
@@ -614,13 +675,15 @@ def process_document(
         Returns:
             ProcessedCitation result
         """
-        nonlocal previous_citation_metadata, previous_citation_formatted
+        nonlocal previous_citation_metadata, previous_citation_formatted, previous_citation_url
         
         note_id = note['id']
         original_text = note['text']
         
         try:
-            # Check if this is an ibid reference
+            # =================================================================
+            # Case 1: Explicit ibid reference (user typed "ibid" or "ibid., 45")
+            # =================================================================
             if is_ibid(original_text):
                 # Handle ibid
                 if previous_citation_metadata is None:
@@ -652,32 +715,75 @@ def process_document(
                     original=original_text,
                     formatted=formatted,
                     metadata=previous_citation_metadata,  # Same source as previous
-                    url=previous_citation_metadata.url if hasattr(previous_citation_metadata, 'url') else None,
+                    url=previous_citation_url,
                     success=True
                 )
             
-            # Not ibid - process normally
+            # =================================================================
+            # Case 2 & 3: Process citation normally, then check for URL match
+            # =================================================================
             metadata, formatted = get_citation(original_text, style)
             
             if metadata and formatted:
-                # Write the formatted citation back
+                # Get the current citation's URL
+                current_url = getattr(metadata, 'url', None) or None
+                
+                # Also check if the original text itself is a URL
+                # (in case metadata.url doesn't capture it)
+                if not current_url and original_text.strip().startswith('http'):
+                    current_url = original_text.strip()
+                
+                # =============================================================
+                # Case 2: Check if this URL matches the previous citation's URL
+                # If so, output "ibid." instead of the full citation
+                # =============================================================
+                if current_url and previous_citation_url and urls_match(current_url, previous_citation_url):
+                    # Same URL as previous - output ibid
+                    formatted = BaseFormatter.format_ibid()
+                    
+                    print(f"[process_document] Repetitive URL detected in {note_type} {note_id} - using ibid.")
+                    
+                    # Write the ibid back
+                    if note_type == 'endnote':
+                        processor.write_endnote(note_id, formatted)
+                    else:
+                        processor.write_footnote(note_id, formatted)
+                    
+                    # Note: previous_citation stays the same (ibid refers to it)
+                    # But we DO update previous_citation_url to the current URL
+                    # so that a third consecutive same-URL also becomes ibid
+                    previous_citation_url = current_url
+                    
+                    return ProcessedCitation(
+                        original=original_text,
+                        formatted=formatted,
+                        metadata=previous_citation_metadata,  # Same source as previous
+                        url=current_url,
+                        success=True
+                    )
+                
+                # =============================================================
+                # Case 3: Normal citation - write full formatted citation
+                # =============================================================
                 if note_type == 'endnote':
                     processor.write_endnote(note_id, formatted)
                 else:
                     processor.write_footnote(note_id, formatted)
                 
-                # Update previous citation for future ibid references
+                # Update previous citation state for future ibid/URL matching
                 previous_citation_metadata = metadata
                 previous_citation_formatted = formatted
+                previous_citation_url = current_url
                 
                 return ProcessedCitation(
                     original=original_text,
                     formatted=formatted,
                     metadata=metadata,
-                    url=metadata.url if hasattr(metadata, 'url') else None,
+                    url=current_url,
                     success=True
                 )
             else:
+                # No metadata found - leave original text
                 return ProcessedCitation(
                     original=original_text,
                     formatted=original_text,
