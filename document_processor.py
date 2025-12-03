@@ -19,12 +19,12 @@ import zipfile
 import tempfile
 import shutil
 import xml.etree.ElementTree as ET
-from typing import List, Optional, Dict, Any
-from dataclasses import dataclass
+from typing import List, Optional, Dict, Any, Tuple
+from dataclasses import dataclass, field
 from io import BytesIO
 
 from router import get_citation
-from formatters.base import BaseFormatter
+from formatters.base import BaseFormatter, get_formatter
 
 
 # =============================================================================
@@ -150,6 +150,83 @@ def urls_match(url1: Optional[str], url2: Optional[str]) -> bool:
     return normalize_url(url1) == normalize_url(url2)
 
 
+# =============================================================================
+# SOURCE MATCHING FOR SHORT FORM DETECTION
+# =============================================================================
+
+def generate_source_key(metadata: Any) -> Optional[str]:
+    """
+    Generate a unique key to identify a source for short form matching.
+    
+    Two citations with the same source key refer to the same work.
+    
+    Priority order for matching:
+    1. DOI (most reliable)
+    2. URL (for web sources)
+    3. Case name + citation (for legal)
+    4. Title + first author (for books/articles)
+    
+    Args:
+        metadata: CitationMetadata object
+        
+    Returns:
+        String key for source matching, or None if no key can be generated
+    """
+    if not metadata:
+        return None
+    
+    # Priority 1: DOI
+    doi = getattr(metadata, 'doi', None)
+    if doi:
+        return f"doi:{doi.lower().strip()}"
+    
+    # Priority 2: URL (normalized)
+    url = getattr(metadata, 'url', None)
+    if url:
+        return f"url:{normalize_url(url)}"
+    
+    # Priority 3: Legal case (case name + citation)
+    case_name = getattr(metadata, 'case_name', None)
+    citation = getattr(metadata, 'citation', None)
+    if case_name and citation:
+        return f"legal:{case_name.lower().strip()}|{citation.lower().strip()}"
+    
+    # Priority 4: Title + first author
+    title = getattr(metadata, 'title', None)
+    authors = getattr(metadata, 'authors', None)
+    if title:
+        key = f"title:{title.lower().strip()}"
+        if authors and len(authors) > 0:
+            key += f"|author:{authors[0].lower().strip()}"
+        return key
+    
+    # Priority 5: Just case name for legal without citation
+    if case_name:
+        return f"case:{case_name.lower().strip()}"
+    
+    return None
+
+
+def sources_match(metadata1: Any, metadata2: Any) -> bool:
+    """
+    Check if two citation metadata objects refer to the same source.
+    
+    Args:
+        metadata1: First CitationMetadata
+        metadata2: Second CitationMetadata
+        
+    Returns:
+        True if both refer to the same work
+    """
+    key1 = generate_source_key(metadata1)
+    key2 = generate_source_key(metadata2)
+    
+    if key1 is None or key2 is None:
+        return False
+    
+    return key1 == key2
+
+
 @dataclass
 class ProcessedCitation:
     """Result of processing a single citation."""
@@ -159,6 +236,99 @@ class ProcessedCitation:
     url: Optional[str]
     success: bool
     error: Optional[str] = None
+    citation_form: str = "full"  # "full", "ibid", or "short"
+
+
+@dataclass 
+class CitationHistoryEntry:
+    """Entry in the citation history for tracking previously cited sources."""
+    metadata: Any
+    formatted: str
+    source_key: Optional[str]
+    note_number: int
+
+
+class CitationHistory:
+    """
+    Tracks all citations seen in a document for ibid and short form handling.
+    
+    Maintains:
+    - Previous citation (for ibid detection)
+    - All cited sources (for short form detection)
+    """
+    
+    def __init__(self):
+        self.previous: Optional[CitationHistoryEntry] = None
+        self.all_sources: Dict[str, CitationHistoryEntry] = {}  # source_key -> first occurrence
+        self.note_counter: int = 0
+    
+    def add(self, metadata: Any, formatted: str) -> None:
+        """
+        Add a citation to the history.
+        
+        Args:
+            metadata: Citation metadata
+            formatted: Formatted citation string
+        """
+        self.note_counter += 1
+        source_key = generate_source_key(metadata)
+        
+        entry = CitationHistoryEntry(
+            metadata=metadata,
+            formatted=formatted,
+            source_key=source_key,
+            note_number=self.note_counter
+        )
+        
+        # Update previous
+        self.previous = entry
+        
+        # Add to all_sources if this is the first time we've seen this source
+        if source_key and source_key not in self.all_sources:
+            self.all_sources[source_key] = entry
+    
+    def is_same_as_previous(self, metadata: Any) -> bool:
+        """
+        Check if the given metadata matches the immediately previous citation.
+        
+        Args:
+            metadata: Citation metadata to check
+            
+        Returns:
+            True if this is the same source as the previous citation
+        """
+        if self.previous is None:
+            return False
+        
+        return sources_match(metadata, self.previous.metadata)
+    
+    def has_been_cited_before(self, metadata: Any) -> bool:
+        """
+        Check if this source has been cited previously in the document.
+        
+        Args:
+            metadata: Citation metadata to check
+            
+        Returns:
+            True if this source has been cited before (not counting current)
+        """
+        source_key = generate_source_key(metadata)
+        if source_key is None:
+            return False
+        
+        return source_key in self.all_sources
+    
+    def get_previous_metadata(self) -> Optional[Any]:
+        """Get the metadata of the previous citation."""
+        if self.previous:
+            return self.previous.metadata
+        return None
+    
+    def get_previous_url(self) -> Optional[str]:
+        """Get the URL of the previous citation."""
+        if self.previous and self.previous.metadata:
+            return getattr(self.previous.metadata, 'url', None)
+        return None
 
 
 class WordDocumentProcessor:
@@ -631,11 +801,14 @@ def process_document(
     """
     Process all citations in a Word document.
     
-    Handles ibid references by tracking the previous citation and outputting
-    "ibid." or "ibid., [page]" as appropriate.
+    Handles citation forms:
+    1. Full citation - first time a source is cited
+    2. Ibid - same source as immediately preceding citation
+    3. Short form - source has been cited before, but not immediately preceding
     
-    Also handles repetitive URLs: if the same URL appears in consecutive notes,
-    the subsequent note is formatted as "ibid." instead of repeating the full citation.
+    Also handles:
+    - Explicit ibid references (user typed "ibid" or "ibid., 45")
+    - Repetitive URLs (same URL as previous note → ibid)
     
     Args:
         file_bytes: The document as bytes
@@ -647,10 +820,11 @@ def process_document(
     """
     results = []
     
-    # Track previous citation for ibid handling
-    previous_citation_metadata = None
-    previous_citation_formatted = None
-    previous_citation_url = None  # Track URL separately for URL matching
+    # Initialize citation history for ibid and short form tracking
+    history = CitationHistory()
+    
+    # Get the formatter for short form citations
+    formatter = get_formatter(style)
     
     # Load document
     processor = WordDocumentProcessor(BytesIO(file_bytes))
@@ -665,8 +839,10 @@ def process_document(
         
         Handles:
         1. Explicit ibid references (user typed "ibid" or "ibid., 45")
-        2. Repetitive URLs (same URL as previous note → output "ibid.")
-        3. Normal citations
+        2. Repetitive URLs (same URL as previous note → ibid)
+        3. Same source as previous → ibid
+        4. Previously cited source → short form
+        5. New source → full citation
         
         Args:
             note: Dict with 'id' and 'text' keys
@@ -675,8 +851,6 @@ def process_document(
         Returns:
             ProcessedCitation result
         """
-        nonlocal previous_citation_metadata, previous_citation_formatted, previous_citation_url
-        
         note_id = note['id']
         original_text = note['text']
         
@@ -685,8 +859,9 @@ def process_document(
             # Case 1: Explicit ibid reference (user typed "ibid" or "ibid., 45")
             # =================================================================
             if is_ibid(original_text):
-                # Handle ibid
-                if previous_citation_metadata is None:
+                previous_metadata = history.get_previous_metadata()
+                
+                if previous_metadata is None:
                     # Ibid without a previous citation - can't resolve
                     print(f"[process_document] Warning: ibid in {note_type} {note_id} but no previous citation")
                     return ProcessedCitation(
@@ -695,7 +870,8 @@ def process_document(
                         metadata=None,
                         url=None,
                         success=False,
-                        error="ibid reference but no previous citation found"
+                        error="ibid reference but no previous citation found",
+                        citation_form="ibid"
                     )
                 
                 # Extract page number if present
@@ -710,79 +886,23 @@ def process_document(
                 else:
                     processor.write_footnote(note_id, formatted)
                 
-                # Note: previous_citation stays the same (ibid refers to it)
-                return ProcessedCitation(
-                    original=original_text,
-                    formatted=formatted,
-                    metadata=previous_citation_metadata,  # Same source as previous
-                    url=previous_citation_url,
-                    success=True
-                )
-            
-            # =================================================================
-            # Case 2 & 3: Process citation normally, then check for URL match
-            # =================================================================
-            metadata, formatted = get_citation(original_text, style)
-            
-            if metadata and formatted:
-                # Get the current citation's URL
-                current_url = getattr(metadata, 'url', None) or None
-                
-                # Also check if the original text itself is a URL
-                # (in case metadata.url doesn't capture it)
-                if not current_url and original_text.strip().startswith('http'):
-                    current_url = original_text.strip()
-                
-                # =============================================================
-                # Case 2: Check if this URL matches the previous citation's URL
-                # If so, output "ibid." instead of the full citation
-                # =============================================================
-                if current_url and previous_citation_url and urls_match(current_url, previous_citation_url):
-                    # Same URL as previous - output ibid
-                    formatted = BaseFormatter.format_ibid()
-                    
-                    print(f"[process_document] Repetitive URL detected in {note_type} {note_id} - using ibid.")
-                    
-                    # Write the ibid back
-                    if note_type == 'endnote':
-                        processor.write_endnote(note_id, formatted)
-                    else:
-                        processor.write_footnote(note_id, formatted)
-                    
-                    # Note: previous_citation stays the same (ibid refers to it)
-                    # But we DO update previous_citation_url to the current URL
-                    # so that a third consecutive same-URL also becomes ibid
-                    previous_citation_url = current_url
-                    
-                    return ProcessedCitation(
-                        original=original_text,
-                        formatted=formatted,
-                        metadata=previous_citation_metadata,  # Same source as previous
-                        url=current_url,
-                        success=True
-                    )
-                
-                # =============================================================
-                # Case 3: Normal citation - write full formatted citation
-                # =============================================================
-                if note_type == 'endnote':
-                    processor.write_endnote(note_id, formatted)
-                else:
-                    processor.write_footnote(note_id, formatted)
-                
-                # Update previous citation state for future ibid/URL matching
-                previous_citation_metadata = metadata
-                previous_citation_formatted = formatted
-                previous_citation_url = current_url
+                # Note: don't add to history - ibid doesn't change the "previous" source
                 
                 return ProcessedCitation(
                     original=original_text,
                     formatted=formatted,
-                    metadata=metadata,
-                    url=current_url,
-                    success=True
+                    metadata=previous_metadata,
+                    url=history.get_previous_url(),
+                    success=True,
+                    citation_form="ibid"
                 )
-            else:
+            
+            # =================================================================
+            # Case 2+: Process citation to get metadata
+            # =================================================================
+            metadata, full_formatted = get_citation(original_text, style)
+            
+            if not metadata or not full_formatted:
                 # No metadata found - leave original text
                 return ProcessedCitation(
                     original=original_text,
@@ -790,8 +910,109 @@ def process_document(
                     metadata=None,
                     url=None,
                     success=False,
-                    error="No metadata found"
+                    error="No metadata found",
+                    citation_form="full"
                 )
+            
+            # Get current URL for matching
+            current_url = getattr(metadata, 'url', None)
+            if not current_url and original_text.strip().startswith('http'):
+                current_url = original_text.strip()
+            
+            # =================================================================
+            # Case 2: Check if same URL as previous → ibid
+            # =================================================================
+            previous_url = history.get_previous_url()
+            if current_url and previous_url and urls_match(current_url, previous_url):
+                formatted = BaseFormatter.format_ibid()
+                
+                print(f"[process_document] Repetitive URL in {note_type} {note_id} - using ibid.")
+                
+                if note_type == 'endnote':
+                    processor.write_endnote(note_id, formatted)
+                else:
+                    processor.write_footnote(note_id, formatted)
+                
+                # Don't add to history - ibid references the previous
+                
+                return ProcessedCitation(
+                    original=original_text,
+                    formatted=formatted,
+                    metadata=history.get_previous_metadata(),
+                    url=current_url,
+                    success=True,
+                    citation_form="ibid"
+                )
+            
+            # =================================================================
+            # Case 3: Check if same source as previous → ibid
+            # =================================================================
+            if history.is_same_as_previous(metadata):
+                formatted = BaseFormatter.format_ibid()
+                
+                print(f"[process_document] Same source as previous in {note_type} {note_id} - using ibid.")
+                
+                if note_type == 'endnote':
+                    processor.write_endnote(note_id, formatted)
+                else:
+                    processor.write_footnote(note_id, formatted)
+                
+                # Don't add to history - ibid references the previous
+                
+                return ProcessedCitation(
+                    original=original_text,
+                    formatted=formatted,
+                    metadata=metadata,
+                    url=current_url,
+                    success=True,
+                    citation_form="ibid"
+                )
+            
+            # =================================================================
+            # Case 4: Check if previously cited → short form
+            # =================================================================
+            if history.has_been_cited_before(metadata):
+                # Use short form
+                formatted = formatter.format_short(metadata)
+                
+                print(f"[process_document] Previously cited source in {note_type} {note_id} - using short form.")
+                
+                if note_type == 'endnote':
+                    processor.write_endnote(note_id, formatted)
+                else:
+                    processor.write_footnote(note_id, formatted)
+                
+                # Add to history (updates "previous" for future ibid checks)
+                history.add(metadata, formatted)
+                
+                return ProcessedCitation(
+                    original=original_text,
+                    formatted=formatted,
+                    metadata=metadata,
+                    url=current_url,
+                    success=True,
+                    citation_form="short"
+                )
+            
+            # =================================================================
+            # Case 5: New source → full citation
+            # =================================================================
+            if note_type == 'endnote':
+                processor.write_endnote(note_id, full_formatted)
+            else:
+                processor.write_footnote(note_id, full_formatted)
+            
+            # Add to history
+            history.add(metadata, full_formatted)
+            
+            return ProcessedCitation(
+                original=original_text,
+                formatted=full_formatted,
+                metadata=metadata,
+                url=current_url,
+                success=True,
+                citation_form="full"
+            )
                 
         except Exception as e:
             print(f"[process_document] Error processing {note_type} {note_id}: {e}")
@@ -801,17 +1022,18 @@ def process_document(
                 metadata=None,
                 url=None,
                 success=False,
-                error=str(e)
+                error=str(e),
+                citation_form="full"
             )
     
-    # Process endnotes (in order - important for ibid tracking)
+    # Process endnotes (in order - important for ibid/short form tracking)
     for note in endnotes:
         result = process_single_note(note, 'endnote')
         results.append(result)
     
-    # Process footnotes (in order - important for ibid tracking)
+    # Process footnotes (in order - important for ibid/short form tracking)
     # Note: We continue tracking from endnotes, which may or may not be desired
-    # If footnotes should have separate ibid tracking, reset previous_citation_metadata here
+    # If footnotes should have separate tracking, reset history here
     for note in footnotes:
         result = process_single_note(note, 'footnote')
         results.append(result)
