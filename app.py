@@ -102,14 +102,58 @@ def cite_document():
                 'error': 'Only .docx files are supported'
             }), 400
         
+        # Map style names
+        style_map = {
+            'Chicago': 'Chicago Manual of Style',
+            'APA': 'APA 7',
+            'MLA': 'MLA 9',
+            'Bluebook': 'Bluebook',
+            'OSCOLA': 'OSCOLA'
+        }
+        full_style = style_map.get(style, style)
+        
+        # Process the document
+        from document_processor import LinkActivator, DOCX_AVAILABLE
+        
+        if not DOCX_AVAILABLE:
+            return jsonify({
+                'success': False,
+                'error': 'Document processing not available (python-docx not installed)'
+            }), 500
+        
+        # Read file bytes
+        file_bytes = file.read()
+        
+        # Create processor and load document
+        activator = LinkActivator()
+        activator.load_document(file_bytes)
+        
+        # Process paragraphs (which contain citations)
+        results = activator.process_paragraphs(style=full_style, add_links=False)
+        
+        # Format results for response
+        citations = []
+        for r in results:
+            citations.append({
+                'original': r.original,
+                'formatted': r.formatted,
+                'type': r.metadata.citation_type.name.lower() if r.metadata else 'unknown',
+                'success': r.success
+            })
+        
+        success_count = sum(1 for r in results if r.success)
+        
         return jsonify({
             'success': True,
-            'count': 0,
-            'citations': [],
-            'message': 'Document processing coming soon'
+            'count': success_count,
+            'total': len(results),
+            'citations': citations,
+            'message': f'{success_count} of {len(results)} citations formatted'
         })
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
@@ -142,6 +186,16 @@ def get_citation(query: str, style: str = "Chicago") -> tuple:
         return None, ""
     
     query = query.strip()
+    
+    # Map short style names to full names
+    style_map = {
+        'Chicago': 'Chicago Manual of Style',
+        'APA': 'APA 7',
+        'MLA': 'MLA 9',
+        'Bluebook': 'Bluebook',
+        'OSCOLA': 'OSCOLA'
+    }
+    full_style = style_map.get(style, style)
     
     # Step 1: Detect citation type
     detection = detect_type(query)
@@ -183,7 +237,7 @@ def get_citation(query: str, style: str = "Chicago") -> tuple:
     
     # Step 3: Format the citation
     if metadata:
-        formatter = get_formatter(style)
+        formatter = get_formatter(full_style)
         citation = formatter.format(metadata)
         return metadata, citation
     
