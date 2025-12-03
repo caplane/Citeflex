@@ -25,6 +25,7 @@ from engines import (
     GoogleBooksEngine,
     OpenLibraryEngine,
 )
+from engines.doi import extract_doi_from_url, fetch_crossref_by_doi
 from formatters import format_citation, get_formatter
 
 
@@ -255,6 +256,19 @@ def route_and_search(query: str, use_gemini: bool = True) -> Optional[CitationMe
         return None
     
     clean_query = query.strip()
+    
+    # ==========================================================================
+    # Route 0: DOI in URL - highest priority for academic publisher URLs
+    # ==========================================================================
+    if 'http' in clean_query.lower():
+        doi = extract_doi_from_url(clean_query)
+        if doi:
+            print(f"[Router] Detected DOI in URL: {doi}")
+            metadata = fetch_crossref_by_doi(doi, clean_query)
+            if metadata and metadata.has_minimum_data():
+                # Keep original URL in the metadata
+                metadata.url = clean_query
+                return metadata
     
     # Step 1: Detect type using pattern matching
     detection = detect_type(clean_query)
