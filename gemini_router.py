@@ -21,8 +21,8 @@ import os
 import json
 from typing import Optional, Tuple, Dict, Any
 
-from .models import CitationType, DetectionResult
-from .config import GEMINI_API_KEY
+from models import CitationType, DetectionResult
+from config import GEMINI_API_KEY
 
 
 # Gemini model configuration

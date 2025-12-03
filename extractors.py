@@ -10,8 +10,8 @@ from datetime import datetime
 from urllib.parse import urlparse
 from typing import Optional
 
-from .models import CitationMetadata, CitationType
-from .config import (
+from models import CitationMetadata, CitationType
+from config import (
     NEWSPAPER_DOMAINS, GOV_AGENCY_MAP,
     get_newspaper_name, get_gov_agency
 )

@@ -12,10 +12,10 @@ This is the primary public API for the modular citation system.
 import re
 from typing import Optional, List, Tuple
 
-from .models import CitationMetadata, CitationType, CitationStyle, DetectionResult
-from .detectors import detect_type
-from .extractors import extract_by_type
-from .engines import (
+from models import CitationMetadata, CitationType, CitationStyle, DetectionResult
+from detectors import detect_type
+from extractors import extract_by_type
+from engines import (
     CrossrefEngine,
     OpenAlexEngine,
     SemanticScholarEngine,
@@ -25,7 +25,7 @@ from .engines import (
     GoogleBooksEngine,
     OpenLibraryEngine,
 )
-from .formatters import format_citation, get_formatter
+from formatters import format_citation, get_formatter
 
 
 # =============================================================================
@@ -262,7 +262,7 @@ def route_and_search(query: str, use_gemini: bool = True) -> Optional[CitationMe
     # Step 2: If low confidence, try Gemini fallback
     if use_gemini and detection.confidence < GEMINI_CONFIDENCE_THRESHOLD:
         try:
-            from .gemini_router import gemini_classify
+            from gemini_router import gemini_classify
             gemini_result = gemini_classify(clean_query, detection.hints)
             if gemini_result and gemini_result.confidence > detection.confidence:
                 detection = gemini_result

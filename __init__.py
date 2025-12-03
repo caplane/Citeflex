@@ -74,7 +74,7 @@ __author__ = "Eric Caplan"
 # =============================================================================
 
 # Models
-from .models import (
+from models import (
     CitationMetadata,
     CitationType,
     CitationStyle,
@@ -82,7 +82,7 @@ from .models import (
 )
 
 # Detection
-from .detectors import (
+from detectors import (
     detect_type,
     detect_citation_type,  # Backward compat
     is_url,
@@ -96,7 +96,7 @@ from .detectors import (
 )
 
 # Extraction
-from .extractors import (
+from extractors import (
     extract_interview,
     extract_newspaper,
     extract_government,
@@ -105,7 +105,7 @@ from .extractors import (
 )
 
 # Formatting
-from .formatters import (
+from formatters import (
     format_citation,
     get_formatter,
     BaseFormatter,
@@ -117,7 +117,7 @@ from .formatters import (
 )
 
 # Main Router API
-from .router import (
+from router import (
     get_citation,
     route_and_search,
     search_journal,
@@ -129,7 +129,7 @@ from .router import (
 )
 
 # Engines (for advanced use)
-from .engines import (
+from engines import (
     SearchEngine,
     CrossrefEngine,
     OpenAlexEngine,
@@ -145,7 +145,7 @@ from .engines import (
 
 # Gemini AI Router (optional)
 try:
-    from .gemini_router import (
+    from gemini_router import (
         GeminiRouter,
         gemini_classify,
         gemini_enhance,
@@ -157,7 +157,7 @@ except ImportError:
 
 # Document Processing (optional - requires python-docx)
 try:
-    from .document_processor import (
+    from document_processor import (
         LinkActivator,
         BulkProcessor,
         EndnoteEditor,

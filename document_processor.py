@@ -31,8 +31,8 @@ except ImportError:
     DOCX_AVAILABLE = False
     print("[document_processor] python-docx not installed, Word processing disabled")
 
-from .models import CitationMetadata
-from .router import get_citation, route_and_search
+from models import CitationMetadata
+from router import get_citation, route_and_search
 
 
 @dataclass

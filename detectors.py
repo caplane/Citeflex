@@ -11,8 +11,8 @@ import re
 from urllib.parse import urlparse
 from typing import Optional
 
-from .models import CitationType, DetectionResult
-from .config import NEWSPAPER_DOMAINS, LEGAL_DOMAINS, MEDICAL_TERMS
+from models import CitationType, DetectionResult
+from config import NEWSPAPER_DOMAINS, LEGAL_DOMAINS, MEDICAL_TERMS
 
 
 # =============================================================================
