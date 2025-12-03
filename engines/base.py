@@ -9,8 +9,8 @@ from abc import ABC, abstractmethod
 from typing import Optional, List
 import requests
 
-from ..models import CitationMetadata, CitationType
-from ..config import DEFAULT_HEADERS, DEFAULT_TIMEOUT
+from models import CitationMetadata, CitationType
+from config import DEFAULT_HEADERS, DEFAULT_TIMEOUT
 
 
 class SearchEngine(ABC):

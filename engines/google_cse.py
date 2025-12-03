@@ -29,10 +29,10 @@ import re
 from typing import Optional, List, Dict, Any
 from urllib.parse import urlparse
 
-from .base import SearchEngine
-from .academic import CrossrefEngine, OpenAlexEngine, SemanticScholarEngine, PubMedEngine
-from ..models import CitationMetadata, CitationType
-from ..config import GOOGLE_CSE_API_KEY, GOOGLE_CSE_ID, ACADEMIC_DOMAINS
+from engines.base import SearchEngine
+from engines.academic import CrossrefEngine, OpenAlexEngine, SemanticScholarEngine, PubMedEngine
+from models import CitationMetadata, CitationType
+from config import GOOGLE_CSE_API_KEY, GOOGLE_CSE_ID, ACADEMIC_DOMAINS
 
 
 class GoogleCSEEngine(SearchEngine):
@@ -483,7 +483,7 @@ class GoogleBooksEngine(SearchEngine):
                 break
         
         # Get publisher place from our mapping
-        from ..config import resolve_publisher_place
+        from config import resolve_publisher_place
         publisher = info.get('publisher', '')
         place = resolve_publisher_place(publisher, '')
         
@@ -553,7 +553,7 @@ class OpenLibraryEngine(SearchEngine):
     def _normalize(self, doc: dict, raw_source: str) -> CitationMetadata:
         """Convert Open Library search result to CitationMetadata."""
         # Get publisher place
-        from ..config import resolve_publisher_place
+        from config import resolve_publisher_place
         publishers = doc.get('publisher', [])
         publisher = publishers[0] if publishers else ''
         place = resolve_publisher_place(publisher, '')
@@ -591,7 +591,7 @@ class OpenLibraryEngine(SearchEngine):
         publishers = data.get('publishers', [])
         publisher = publishers[0] if publishers else ''
         
-        from ..config import resolve_publisher_place
+        from config import resolve_publisher_place
         place = resolve_publisher_place(publisher, '')
         
         return self._create_metadata(

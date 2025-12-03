@@ -12,9 +12,9 @@ import re
 import difflib
 from typing import Optional, List
 
-from .base import SearchEngine
-from ..models import CitationMetadata, CitationType
-from ..config import PUBMED_API_KEY, SEMANTIC_SCHOLAR_API_KEY
+from engines.base import SearchEngine
+from models import CitationMetadata, CitationType
+from config import PUBMED_API_KEY, SEMANTIC_SCHOLAR_API_KEY
 
 
 class CrossrefEngine(SearchEngine):

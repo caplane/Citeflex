@@ -11,9 +11,9 @@ import re
 import difflib
 from typing import Optional, List, Dict
 
-from .base import SearchEngine, MultiAttemptEngine
-from ..models import CitationMetadata, CitationType
-from ..config import COURTLISTENER_API_KEY
+from engines.base import SearchEngine, MultiAttemptEngine
+from models import CitationMetadata, CitationType
+from config import COURTLISTENER_API_KEY
 
 
 # =============================================================================

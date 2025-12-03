@@ -4,20 +4,20 @@ citeflex/engines/__init__.py
 Search engines package.
 """
 
-from .base import SearchEngine, MultiAttemptEngine
-from .academic import (
+from engines.base import SearchEngine, MultiAttemptEngine
+from engines.academic import (
     CrossrefEngine,
     OpenAlexEngine,
     SemanticScholarEngine,
     PubMedEngine,
 )
-from .legal import (
+from engines.legal import (
     FamousCasesCache,
     UKCitationParser,
     CourtListenerEngine,
     LegalSearchEngine,
 )
-from .google_cse import (
+from engines.google_cse import (
     GoogleCSEEngine,
     GoogleBooksEngine,
     OpenLibraryEngine,
