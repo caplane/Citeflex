@@ -44,6 +44,37 @@ class BaseFormatter(ABC):
         return self.format_generic(metadata)
     
     # =========================================================================
+    # IBID SUPPORT
+    # =========================================================================
+    
+    @staticmethod
+    def format_ibid(page: Optional[str] = None) -> str:
+        """
+        Format an ibid citation.
+        
+        Ibid (from Latin "ibidem" meaning "in the same place") is used when
+        citing the same source as the immediately preceding citation.
+        
+        Rules:
+        - Always lowercase: "ibid." not "Ibid."
+        - Always roman (normal) font, never italic
+        - Same page: "ibid."
+        - Different page: "ibid., [page]"
+        
+        Args:
+            page: Optional page number for different page in same source
+            
+        Returns:
+            Formatted ibid string
+        """
+        if page:
+            # Different page from same source
+            return f"ibid., {page}."
+        else:
+            # Same source, same page (or page not specified)
+            return "ibid."
+    
+    # =========================================================================
     # ABSTRACT METHODS - Must be implemented by each style
     # =========================================================================
     
