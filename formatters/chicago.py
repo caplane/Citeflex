@@ -7,6 +7,7 @@ This is the default style for history and humanities.
 Uses <i> tags for italics (Word-compatible).
 """
 
+from typing import Optional
 from formatters.base import BaseFormatter, register_formatter
 from models import CitationMetadata, CitationStyle
 
@@ -28,6 +29,14 @@ class ChicagoFormatter(BaseFormatter):
     - Interview: Subject, interview by Interviewer, Location, Date.
     - Newspaper: Author, "Title," Newspaper, Date. URL
     - Government: Agency, Title. URL
+    
+    Short form patterns:
+    - Journal: Author, "Short Title," page.
+    - Book: Author, Short Title, page.
+    - Legal: Case Name, citation at page.
+    - Interview: Subject interview.
+    - Newspaper: Author, "Short Title."
+    - Government: Short Title.
     """
     
     style = CitationStyle.CHICAGO
@@ -92,7 +101,7 @@ class ChicagoFormatter(BaseFormatter):
         if m.publisher:
             pub_parts.append(m.publisher)
         if m.year:
-            pub_parts.append(m.year)
+            pub_parts.append(str(m.year))
         
         if pub_parts:
             if m.place and m.publisher:
@@ -127,7 +136,7 @@ class ChicagoFormatter(BaseFormatter):
             # Don't repeat court for Supreme Court cases with U.S. citation
             paren_parts.append(m.court)
         if m.year:
-            paren_parts.append(m.year)
+            paren_parts.append(str(m.year))
         
         parenthetical = f"({' '.join(paren_parts)})" if paren_parts else ""
         
@@ -218,3 +227,153 @@ class ChicagoFormatter(BaseFormatter):
         
         result = ", ".join(filter(None, parts))
         return result + "." if result and not result.endswith('.') else result
+    
+    # =========================================================================
+    # SHORT FORM METHODS - Chicago style
+    # =========================================================================
+    
+    def format_short_journal(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Chicago short form for journal article.
+        
+        Pattern: Author, "Short Title," page.
+        Example: Watson and Crick, "Molecular Structure," 737.
+        """
+        parts = []
+        
+        # Author last name(s)
+        if m.authors:
+            parts.append(self.get_authors_short(m.authors, max_authors=2))
+        
+        # Short title in quotes
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            parts.append(f'"{short_title}"')
+        
+        result = ", ".join(parts)
+        
+        # Add page if provided
+        if page:
+            result += f", {page}"
+        
+        return result + "." if result else m.raw_source or "Unknown source"
+    
+    def format_short_book(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Chicago short form for book.
+        
+        Pattern: Author, Short Title, page.
+        Example: Klerman, Lazarus, 45.
+        """
+        parts = []
+        
+        # Author last name(s)
+        if m.authors:
+            parts.append(self.get_authors_short(m.authors, max_authors=2))
+        
+        # Short title in italics
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            parts.append(self.italicize(short_title))
+        
+        result = ", ".join(parts)
+        
+        # Add page if provided
+        if page:
+            result += f", {page}"
+        
+        return result + "." if result else m.raw_source or "Unknown source"
+    
+    def format_short_legal(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Chicago short form for legal case.
+        
+        Pattern: Case Name, citation at page.
+        Example: Roe v. Wade, 410 U.S. at 153.
+        
+        Or just: Case Name (if no pinpoint).
+        Example: Roe v. Wade.
+        """
+        parts = []
+        
+        # Case name in italics (shortened if very long)
+        if m.case_name:
+            # Use first party name for very long case names
+            case_name = m.case_name
+            if ' v. ' in case_name or ' v ' in case_name:
+                # Keep full case name for short form in Chicago
+                pass
+            parts.append(self.italicize(case_name))
+        
+        # Add citation with pinpoint if page provided
+        if page and m.citation:
+            parts.append(f"{m.citation} at {page}")
+        elif m.citation:
+            parts.append(m.citation)
+        
+        result = ", ".join(parts)
+        return result + "." if result else m.raw_source or "Unknown source"
+    
+    def format_short_interview(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Chicago short form for interview.
+        
+        Pattern: Subject interview.
+        Example: Klerman interview.
+        """
+        if m.interviewee:
+            # Get last name
+            name_parts = m.interviewee.split()
+            last_name = name_parts[-1] if name_parts else m.interviewee
+            return f"{last_name} interview."
+        
+        return "Interview."
+    
+    def format_short_newspaper(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Chicago short form for newspaper article.
+        
+        Pattern: Author, "Short Title."
+        Example: Smith, "Court Ruling."
+        """
+        parts = []
+        
+        # Author last name
+        if m.authors:
+            parts.append(self.get_authors_short(m.authors, max_authors=1))
+        
+        # Short title in quotes
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            parts.append(f'"{short_title}"')
+        
+        result = ", ".join(parts)
+        return result + "." if result else m.raw_source or "Unknown source"
+    
+    def format_short_government(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Chicago short form for government document.
+        
+        Pattern: Short Title.
+        Example: Mental Health Report.
+        """
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            result = self.italicize(short_title)
+            if page:
+                result += f", {page}"
+            return result + "."
+        
+        return m.raw_source or "Unknown source"
+    
+    def format_short_url(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        Chicago short form for web page.
+        
+        Pattern: "Short Title."
+        """
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            return f'"{short_title}."'
+        
+        return m.url or m.raw_source or "Unknown source"
