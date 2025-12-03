@@ -63,7 +63,7 @@ def search_journal(query: str) -> Optional[CitationMetadata]:
     Search for a journal article across multiple engines.
     
     Search order (optimized for finding obscure/older articles):
-    1. Google CSE FIRST (searches JSTOR, Google Scholar - best coverage)
+    1. Google CSE FIRST (searches JSTOR, Google Scholar - best coverage for obscure sources)
     2. Crossref (DOI registry)
     3. OpenAlex (broad coverage)
     4. Semantic Scholar (author-aware)
@@ -71,10 +71,12 @@ def search_journal(query: str) -> Optional[CitationMetadata]:
     Returns first successful result.
     """
     # Engine 1: Google CSE FIRST (best for JSTOR, older articles, obscure sources)
+    # This is critical for messy notes like "Caplan trains brains sprains"
     google_cse = _get_engine('google_cse')
     if google_cse:
         result = google_cse.search(query)
         if result and result.has_minimum_data():
+            print(f"[search_journal] Found via Google CSE: {result.title}")
             return result
     
     # Engines 2-4: Other academic engines
@@ -83,6 +85,7 @@ def search_journal(query: str) -> Optional[CitationMetadata]:
         if engine:
             result = engine.search(query)
             if result and result.has_minimum_data():
+                print(f"[search_journal] Found via {engine_name}: {result.title}")
                 return result
     
     return None
