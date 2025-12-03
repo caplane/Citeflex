@@ -16,13 +16,11 @@ import os
 import re
 import io
 import uuid
+import zipfile
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file, session
 from werkzeug.utils import secure_filename
-from docx import Document
-from docx.shared import Pt
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
+from xml.etree import ElementTree as ET
 
 # Import CiteFlex components
 from models import CitationMetadata, CitationType, CitationStyle
@@ -68,13 +66,25 @@ def clear_session_data():
 
 
 # =============================================================================
-# WORD DOCUMENT PROCESSING (using python-docx)
+# WORD DOCUMENT PROCESSING (XML approach with endnoteRef fix)
 # =============================================================================
+
+# XML namespaces for docx
+NAMESPACES = {
+    'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+    'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+    'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
+}
+
+# Register namespaces to preserve them on output
+for prefix, uri in NAMESPACES.items():
+    ET.register_namespace(prefix, uri)
+ET.register_namespace('', NAMESPACES['w'])
 
 
 def extract_notes_from_docx(file_bytes):
     """
-    Extract endnotes and footnotes from a .docx file using python-docx.
+    Extract endnotes and footnotes from a .docx file.
     
     Returns:
         tuple: (endnotes_list, footnotes_list)
@@ -84,113 +94,136 @@ def extract_notes_from_docx(file_bytes):
     footnotes = []
     
     try:
-        doc = Document(io.BytesIO(file_bytes))
-        
-        # Extract endnotes
-        if hasattr(doc, 'part') and doc.part.endnotes_part:
-            endnotes_part = doc.part.endnotes_part
-            for endnote in endnotes_part.element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}endnote'):
-                note_id = endnote.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}id')
-                if note_id in ['0', '-1']:  # Skip separator notes
-                    continue
-                
-                # Extract text from all paragraphs
-                text_parts = []
-                for t in endnote.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'):
-                    if t.text:
-                        text_parts.append(t.text)
-                
-                text = ''.join(text_parts).strip()
-                if text:
-                    endnotes.append({
-                        'id': note_id,
-                        'text': text,
-                        'type': 'endnote'
-                    })
-        
-        # Extract footnotes
-        if hasattr(doc, 'part') and doc.part.footnotes_part:
-            footnotes_part = doc.part.footnotes_part
-            for footnote in footnotes_part.element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}footnote'):
-                note_id = footnote.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}id')
-                if note_id in ['0', '-1']:  # Skip separator notes
-                    continue
-                
-                # Extract text from all paragraphs
-                text_parts = []
-                for t in footnote.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'):
-                    if t.text:
-                        text_parts.append(t.text)
-                
-                text = ''.join(text_parts).strip()
-                if text:
-                    footnotes.append({
-                        'id': f'fn_{note_id}',
-                        'text': text,
-                        'type': 'footnote'
-                    })
+        with zipfile.ZipFile(io.BytesIO(file_bytes), 'r') as zf:
+            # Extract endnotes
+            if 'word/endnotes.xml' in zf.namelist():
+                endnotes_xml = zf.read('word/endnotes.xml')
+                endnotes = _parse_notes_xml(endnotes_xml, 'endnote')
+            
+            # Extract footnotes
+            if 'word/footnotes.xml' in zf.namelist():
+                footnotes_xml = zf.read('word/footnotes.xml')
+                footnotes = _parse_notes_xml(footnotes_xml, 'footnote')
     
     except Exception as e:
         print(f"[Extract] Error reading document: {e}")
-        import traceback
-        traceback.print_exc()
         raise
     
     return endnotes, footnotes
 
 
+def _parse_notes_xml(xml_bytes, note_type):
+    """Parse endnotes.xml or footnotes.xml and extract text."""
+    notes = []
+    
+    try:
+        root = ET.fromstring(xml_bytes)
+        
+        # Find all endnote or footnote elements
+        tag = f'{{{NAMESPACES["w"]}}}{note_type}'
+        for note_elem in root.findall(f'.//{tag}'):
+            note_id = note_elem.get(f'{{{NAMESPACES["w"]}}}id')
+            
+            # Skip separator notes (id 0 and -1)
+            if note_id in ['0', '-1']:
+                continue
+            
+            # Extract all text from paragraphs
+            text_parts = []
+            for p in note_elem.findall(f'.//{{{NAMESPACES["w"]}}}p'):
+                for t in p.findall(f'.//{{{NAMESPACES["w"]}}}t'):
+                    if t.text:
+                        text_parts.append(t.text)
+            
+            text = ''.join(text_parts).strip()
+            
+            if text:
+                prefix = 'fn_' if note_type == 'footnote' else ''
+                notes.append({
+                    'id': f'{prefix}{note_id}',
+                    'text': text,
+                    'type': note_type
+                })
+    
+    except Exception as e:
+        print(f"[Parse] Error parsing {note_type}s: {e}")
+    
+    return notes
+
+
 def update_notes_in_docx(file_bytes, updates, add_links=True):
     """
-    Update notes in a .docx file with new text using python-docx.
+    Update notes in a .docx file with new text.
     
     Args:
         file_bytes: Original document bytes
         updates: Dict mapping note_id -> new_html
-        add_links: Whether to make URLs clickable (not implemented yet)
+        add_links: Whether to make URLs clickable
         
     Returns:
         Modified document bytes
     """
     try:
-        doc = Document(io.BytesIO(file_bytes))
+        # Read the original document
+        input_zip = zipfile.ZipFile(io.BytesIO(file_bytes), 'r')
+        output_buffer = io.BytesIO()
+        output_zip = zipfile.ZipFile(output_buffer, 'w', zipfile.ZIP_DEFLATED)
         
-        # Update endnotes
-        if hasattr(doc, 'part') and doc.part.endnotes_part:
-            endnotes_part = doc.part.endnotes_part
-            for endnote in endnotes_part.element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}endnote'):
-                note_id = endnote.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}id')
-                
-                if note_id in updates:
-                    _update_note_element(endnote, updates[note_id])
+        for item in input_zip.namelist():
+            data = input_zip.read(item)
+            
+            # Modify endnotes.xml
+            if item == 'word/endnotes.xml':
+                data = _update_notes_xml(data, updates, 'endnote', add_links)
+            
+            # Modify footnotes.xml
+            elif item == 'word/footnotes.xml':
+                data = _update_notes_xml(data, updates, 'footnote', add_links)
+            
+            output_zip.writestr(item, data)
         
-        # Update footnotes
-        if hasattr(doc, 'part') and doc.part.footnotes_part:
-            footnotes_part = doc.part.footnotes_part
-            for footnote in footnotes_part.element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}footnote'):
-                note_id = footnote.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}id')
-                lookup_id = f'fn_{note_id}'
-                
-                if lookup_id in updates:
-                    _update_note_element(footnote, updates[lookup_id])
+        input_zip.close()
+        output_zip.close()
         
-        # Save to bytes
-        output = io.BytesIO()
-        doc.save(output)
-        return output.getvalue()
+        return output_buffer.getvalue()
     
     except Exception as e:
         print(f"[Update] Error updating document: {e}")
-        import traceback
-        traceback.print_exc()
         raise
 
 
-def _update_note_element(note_elem, new_text):
+def _update_notes_xml(xml_bytes, updates, note_type, add_links=True):
+    """Update notes in XML with new text."""
+    try:
+        root = ET.fromstring(xml_bytes)
+        
+        tag = f'{{{NAMESPACES["w"]}}}{note_type}'
+        for note_elem in root.findall(f'.//{tag}'):
+            note_id = note_elem.get(f'{{{NAMESPACES["w"]}}}id')
+            
+            # Check if we have an update for this note
+            prefix = 'fn_' if note_type == 'footnote' else ''
+            lookup_id = f'{prefix}{note_id}'
+            
+            if lookup_id in updates:
+                new_text = updates[lookup_id]
+                _replace_note_content(note_elem, new_text, add_links)
+        
+        return ET.tostring(root, encoding='unicode').encode('utf-8')
+    
+    except Exception as e:
+        print(f"[UpdateXML] Error: {e}")
+        return xml_bytes
+
+
+def _replace_note_content(note_elem, new_text, add_links=True):
     """
-    Update a single endnote/footnote element with new text.
-    Preserves the reference marker (endnoteRef/footnoteRef).
+    Replace the content of a note element with new text.
+    
+    CRITICAL: Must preserve the <w:endnoteRef/> or <w:footnoteRef/> element
+    which links the note back to the document. Deleting this corrupts the file.
     """
-    W_NS = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    W_NS = f'{{{NAMESPACES["w"]}}}'
     
     # Find all paragraphs
     paragraphs = note_elem.findall(f'.//{W_NS}p')
@@ -211,7 +244,7 @@ def _update_note_element(note_elem, new_text):
             run.find(f'{W_NS}footnoteRef') is not None
         )
         if has_ref:
-            ref_run = run
+            ref_run = run  # KEEP this one!
         else:
             text_runs.append(run)
     
@@ -219,7 +252,7 @@ def _update_note_element(note_elem, new_text):
     for run in text_runs:
         first_p.remove(run)
     
-    # Remove additional paragraphs
+    # Remove additional paragraphs (keep only first)
     for p in paragraphs[1:]:
         note_elem.remove(p)
     
@@ -228,27 +261,23 @@ def _update_note_element(note_elem, new_text):
     
     # Add new text runs after the reference marker
     for i, part in enumerate(parts):
-        new_run = OxmlElement(f'{W_NS}r')
+        new_run = ET.SubElement(first_p, f'{W_NS}r')
         
         # Add formatting if needed
         if part.get('italic') or part.get('bold'):
-            rPr = OxmlElement(f'{W_NS}rPr')
+            rPr = ET.SubElement(new_run, f'{W_NS}rPr')
             if part.get('italic'):
-                rPr.append(OxmlElement(f'{W_NS}i'))
+                ET.SubElement(rPr, f'{W_NS}i')
             if part.get('bold'):
-                rPr.append(OxmlElement(f'{W_NS}b'))
-            new_run.append(rPr)
+                ET.SubElement(rPr, f'{W_NS}b')
         
         # Add text element
-        t = OxmlElement(f'{W_NS}t')
+        t = ET.SubElement(new_run, f'{W_NS}t')
         t.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
         text = part['text']
         if i == 0:
             text = ' ' + text  # Add space after reference number
         t.text = text
-        new_run.append(t)
-        
-        first_p.append(new_run)
 
 
 def _parse_formatted_text(html_text):
