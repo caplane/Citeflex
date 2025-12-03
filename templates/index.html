@@ -171,6 +171,7 @@
     let currentStyle = 'Chicago';
     let currentCitation = '';
     let currentQuery = '';
+    let uploadedFile = null;  // Store the uploaded file for download
 
     function setStyle(style) {
       currentStyle = style;
@@ -270,6 +271,7 @@
       
       const file = event.dataTransfer.files[0];
       if (file && file.name.endsWith('.docx')) {
+        uploadedFile = file;  // Store for download
         document.getElementById('docName').textContent = file.name;
         document.getElementById('singleMode').classList.add('hidden');
         document.getElementById('singleResult').classList.add('hidden');
@@ -294,18 +296,25 @@
           document.getElementById('docResults').classList.remove('hidden');
           
           if (data.success && data.citations && data.citations.length > 0) {
-            document.getElementById('docResultCount').textContent = `${data.count} citations formatted successfully`;
+            document.getElementById('docResultCount').textContent = `${data.count} of ${data.total} citations formatted`;
             
             const listEl = document.getElementById('docResultsList');
             listEl.innerHTML = data.citations.map(item => `
               <div class="bg-slate-50 rounded-lg p-3">
-                <p class="text-xs text-slate-400 mb-1">${item.original}</p>
+                <p class="text-xs text-slate-400 mb-1">${escapeHtml(item.original)}</p>
                 <p class="text-slate-700">${item.formatted}</p>
               </div>
             `).join('');
-          } else {
-            document.getElementById('docResultCount').textContent = data.message || 'Document processed';
+          } else if (data.success) {
+            document.getElementById('docResultCount').textContent = data.message || 'No citations found in document';
             document.getElementById('docResultsList').innerHTML = '';
+          } else {
+            document.getElementById('docResultCount').textContent = 'Error processing document';
+            document.getElementById('docResultsList').innerHTML = `
+              <div class="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
+                <p>${escapeHtml(data.error || 'Unknown error')}</p>
+              </div>
+            `;
           }
         } catch (error) {
           document.getElementById('docLoading').classList.add('hidden');
@@ -313,17 +322,74 @@
           document.getElementById('docResultCount').textContent = 'Error processing document';
           document.getElementById('docResultsList').innerHTML = `
             <div class="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
-              <p>${error.message || 'Connection error'}</p>
+              <p>${escapeHtml(error.message || 'Connection error')}</p>
             </div>
           `;
         }
       }
     }
 
+    async function handleDownload() {
+      if (!uploadedFile) {
+        alert('No file to download');
+        return;
+      }
+
+      const btn = document.getElementById('downloadBtn');
+      const originalText = btn.textContent;
+      btn.textContent = 'Preparing download...';
+      btn.disabled = true;
+
+      try {
+        const formData = new FormData();
+        formData.append('file', uploadedFile);
+        formData.append('style', currentStyle);
+
+        const response = await fetch('/api/cite/document/download', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Download failed');
+        }
+
+        // Get the blob and trigger download
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'formatted_' + uploadedFile.name;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+      } catch (error) {
+        alert('Download failed: ' + error.message);
+      }
+
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }
+
     function resetDoc() {
+      uploadedFile = null;
       document.getElementById('docMode').classList.add('hidden');
       document.getElementById('singleMode').classList.remove('hidden');
     }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Wire up download button
+    document.addEventListener('DOMContentLoaded', function() {
+      document.getElementById('downloadBtn').addEventListener('click', handleDownload);
+    });
   </script>
 
 </body>
