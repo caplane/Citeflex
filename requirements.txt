@@ -1,14 +1,5 @@
-# CiteFlex Pro - Requirements
-# Flask web application
-
-# Web framework
-flask>=3.0.0
-gunicorn>=21.0.0
-
-# HTTP requests for API calls
-requests>=2.31.0
-
-# Word document processing (uses standard library: zipfile, xml.etree.ElementTree)
-
-# Environment variables
-python-dotenv>=1.0.0
+flask
+gunicorn
+requests
+python-dotenv
+python-docx
