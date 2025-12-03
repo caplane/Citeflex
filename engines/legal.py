@@ -141,6 +141,41 @@ class FamousCasesCache(SearchEngine):
         
         return None
     
+    def search_multiple(self, query: str, limit: int = 5) -> List[CitationMetadata]:
+        """
+        Search for multiple matches. For famous cases, we typically have one match,
+        but we can return fuzzy matches if requested.
+        """
+        results = []
+        clean_key = _normalize_case_key(query)
+        
+        # Exact match
+        if clean_key in FAMOUS_CASES:
+            results.append(self._from_cache(FAMOUS_CASES[clean_key], query))
+            if len(results) >= limit:
+                return results
+        
+        # Check aliases
+        for alias, full_key in self.ALIASES.items():
+            if alias in clean_key and full_key in FAMOUS_CASES:
+                result = self._from_cache(FAMOUS_CASES[full_key], query)
+                if not any(r.case_name == result.case_name for r in results):
+                    results.append(result)
+                    if len(results) >= limit:
+                        return results
+        
+        # Fuzzy matches
+        cutoff = 0.4  # Lower cutoff to get more matches
+        matches = difflib.get_close_matches(clean_key, FAMOUS_CASES.keys(), n=limit, cutoff=cutoff)
+        for match_key in matches:
+            result = self._from_cache(FAMOUS_CASES[match_key], query)
+            if not any(r.case_name == result.case_name for r in results):
+                results.append(result)
+                if len(results) >= limit:
+                    break
+        
+        return results
+    
     def _from_cache(self, data: dict, raw_source: str) -> CitationMetadata:
         return CitationMetadata(
             citation_type=CitationType.LEGAL,
@@ -161,44 +196,47 @@ class FamousCasesCache(SearchEngine):
 class UKCitationParser(SearchEngine):
     """
     Parse UK neutral citations like [2024] UKSC 123.
-    No API calls - regex-based extraction.
+    No API calls - purely regex-based extraction.
     """
     
     name = "UK Citation Parser"
     
+    UK_COURTS = {
+        'UKSC': 'Supreme Court',
+        'UKHL': 'House of Lords',
+        'UKPC': 'Privy Council',
+        'EWCA': 'Court of Appeal',
+        'EWHC': 'High Court',
+        'EWCOP': 'Court of Protection',
+        'UKUT': 'Upper Tribunal',
+        'UKFTT': 'First-tier Tribunal',
+        'EWFC': 'Family Court',
+        'UKIPO': 'Intellectual Property Office',
+        'UKEAT': 'Employment Appeal Tribunal',
+    }
+    
     def search(self, query: str) -> Optional[CitationMetadata]:
-        # UK neutral citation pattern: [2024] UKSC 123 or [2022] EWHC 456 (QB)
-        # Pattern allows for optional division in parentheses
-        pattern = r'\[(\d{4})\]\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+(\d+)(?:\s*\([A-Za-z]+\))?'
+        # Pattern: [YEAR] COURT NUMBER
+        pattern = r'\[(\d{4})\]\s*([A-Z]{2,6})\s*(?:\([^)]+\))?\s*(\d+)'
         match = re.search(pattern, query)
         
         if not match:
             return None
         
-        year, court, num = match.groups()
+        year, court_code, number = match.groups()
         
-        # Extract case name (text before the citation)
-        parts = query.split('[')
-        case_name = parts[0].strip().rstrip(',') or "Unknown Case"
-        
-        # Reconstruct full citation including division if present
-        full_match = re.search(r'\[(\d{4})\]\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+(\d+)(\s*\([A-Za-z]+\))?', query)
-        if full_match:
-            division = full_match.group(4) or ""
-            neutral_citation = f"[{year}] {court.upper()} {num}{division}"
-        else:
-            neutral_citation = f"[{year}] {court.upper()} {num}"
+        court_name = self.UK_COURTS.get(court_code, court_code)
+        neutral_citation = f"[{year}] {court_code} {number}"
         
         return CitationMetadata(
             citation_type=CitationType.LEGAL,
             raw_source=query,
             source_engine=self.name,
-            case_name=case_name,
-            citation=neutral_citation,
             neutral_citation=neutral_citation,
             year=year,
-            court=court.upper(),
+            court=court_name,
             jurisdiction='UK',
+            case_name=query,  # Use raw query as case name placeholder
         )
 
 
@@ -209,17 +247,26 @@ class UKCitationParser(SearchEngine):
 class CourtListenerEngine(MultiAttemptEngine):
     """
     Search CourtListener for US case law.
-    Uses 4-attempt search strategy for maximum recall.
+    
+    Uses a 4-attempt strategy:
+    1. Exact phrase search
+    2. Keyword search
+    3. Fuzzy search
+    4. Plaintiff-only (for cases like "Smith v. Jones")
     """
     
     name = "CourtListener"
-    base_url = "https://www.courtlistener.com/api/rest/v3/search/"
+    base_url = "https://www.courtlistener.com/api/rest/v4/search/"
     
     def __init__(self, api_key: Optional[str] = None, **kwargs):
-        super().__init__(api_key=api_key or COURTLISTENER_API_KEY, **kwargs)
+        self.api_key = api_key or COURTLISTENER_API_KEY
+        super().__init__(**kwargs)
     
-    def _get_headers(self) -> dict:
-        headers = {}
+    def get_headers(self) -> dict:
+        headers = {
+            'User-Agent': 'CiteFlex/2.0 (Academic Citation Tool)',
+            'Accept': 'application/json',
+        }
         if self.api_key:
             headers['Authorization'] = f'Token {self.api_key}'
         return headers
@@ -275,6 +322,46 @@ class CourtListenerEngine(MultiAttemptEngine):
             return None
         except:
             return None
+    
+    def parse_response_multiple(self, response, query: str, limit: int = 5) -> List[CitationMetadata]:
+        """Parse CourtListener response for multiple results."""
+        results = []
+        try:
+            data = response.json()
+            api_results = data.get('results', [])
+            
+            for result in api_results[:limit]:
+                case_name = result.get('caseName') or result.get('case_name')
+                if case_name:
+                    results.append(self._normalize(result, query))
+            
+            return results
+        except:
+            return results
+    
+    def search_multiple(self, query: str, limit: int = 5) -> List[CitationMetadata]:
+        """Search and return multiple results."""
+        import requests
+        
+        attempts = self.get_search_attempts(query)
+        
+        for attempt in attempts:
+            try:
+                response = requests.get(
+                    self.base_url,
+                    params=attempt['params'],
+                    headers=self.get_headers(),
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    results = self.parse_response_multiple(response, query, limit)
+                    if results:
+                        return results
+            except:
+                continue
+        
+        return []
     
     def _normalize(self, item: dict, raw_source: str) -> CitationMetadata:
         """Convert CourtListener response to CitationMetadata."""
@@ -372,3 +459,46 @@ class LegalSearchEngine(SearchEngine):
         
         # 3. CourtListener search
         return self.court_listener.search(query)
+    
+    def search_multiple(self, query: str, limit: int = 5) -> List[CitationMetadata]:
+        """
+        Search for multiple legal case results.
+        
+        For legal cases, we prioritize:
+        1. Famous Cases Cache (most reliable, instant)
+        2. CourtListener API (for obscure cases)
+        """
+        results = []
+        seen_names = set()
+        
+        def add_result(r: CitationMetadata) -> bool:
+            """Add result if not duplicate. Returns True if limit reached."""
+            name_key = r.case_name.lower().strip()[:50] if r.case_name else ''
+            if name_key and name_key not in seen_names:
+                seen_names.add(name_key)
+                results.append(r)
+                return len(results) >= limit
+            return False
+        
+        # 1. UK neutral citation?
+        if '[' in query and ']' in query:
+            result = self.uk_parser.search(query)
+            if result:
+                if add_result(result):
+                    return results
+        
+        # 2. Famous cases (can return multiple fuzzy matches)
+        cache_results = self.cache.search_multiple(query, limit=limit)
+        for r in cache_results:
+            if add_result(r):
+                return results
+        
+        # 3. CourtListener (if we still need more results)
+        if len(results) < limit:
+            remaining = limit - len(results)
+            cl_results = self.court_listener.search_multiple(query, limit=remaining)
+            for r in cl_results:
+                if add_result(r):
+                    return results
+        
+        return results
