@@ -26,6 +26,7 @@ from engines import (
     OpenLibraryEngine,
 )
 from engines.doi import extract_doi_from_url, fetch_crossref_by_doi
+from gemini_router import gemini_enhance
 from formatters import format_citation, get_formatter
 
 
@@ -202,6 +203,13 @@ def search_all_sources(query: str, max_results: int = 5) -> List[CitationMetadat
             result = fetch_crossref_by_doi(doi)
             if result and result.has_minimum_data():
                 return [result]
+    
+    # Gemini enhancement: improve query for better search results
+    detection = detect_type(query)
+    enhanced = gemini_enhance(query, detection.citation_type)
+    if enhanced and enhanced != query:
+        print(f"[SearchEnhance] '{query[:40]}...' → '{enhanced[:60]}...'")
+        query = enhanced
     
     seen_titles = set()
     
