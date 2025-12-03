@@ -111,8 +111,9 @@ class OSCOLAFormatter(BaseFormatter):
         # For older cases without neutral citations, add year if not in citation
         if metadata.year and metadata.citation and '[' not in metadata.citation:
             # Year goes in parentheses for traditional citations
-            if f"({metadata.year})" not in metadata.citation and metadata.year not in metadata.citation:
-                parts.append(f"({metadata.year})")
+            year_str = str(metadata.year)
+            if f"({year_str})" not in metadata.citation and year_str not in metadata.citation:
+                parts.append(f"({year_str})")
         
         return " ".join(parts)
     
@@ -187,7 +188,7 @@ class OSCOLAFormatter(BaseFormatter):
         if metadata.publisher:
             paren_parts.append(metadata.publisher)
         if metadata.year:
-            paren_parts.append(metadata.year)
+            paren_parts.append(str(metadata.year))
         
         if paren_parts:
             parts.append(f"({', '.join(paren_parts)})")
@@ -215,7 +216,7 @@ class OSCOLAFormatter(BaseFormatter):
         if metadata.date:
             paren_parts.append(metadata.date)
         elif metadata.year:
-            paren_parts.append(metadata.year)
+            paren_parts.append(str(metadata.year))
         
         if paren_parts:
             parts.append(f"({', '.join(paren_parts)})")
@@ -253,7 +254,7 @@ class OSCOLAFormatter(BaseFormatter):
         if metadata.date:
             paren_parts.append(metadata.date)
         elif metadata.year:
-            paren_parts.append(metadata.year)
+            paren_parts.append(str(metadata.year))
         
         if paren_parts:
             parts.append(f"({', '.join(paren_parts)})")
@@ -285,7 +286,7 @@ class OSCOLAFormatter(BaseFormatter):
         if metadata.citation:
             paren_parts.append(metadata.citation)
         if metadata.year:
-            paren_parts.append(metadata.year)
+            paren_parts.append(str(metadata.year))
         
         if paren_parts:
             parts.append(f"({', '.join(paren_parts)})")
@@ -376,3 +377,146 @@ class OSCOLAFormatter(BaseFormatter):
             parts.append(f"ECR {metadata.pages}")
         
         return " ".join(parts)
+    
+    # =========================================================================
+    # SHORT FORM METHODS - OSCOLA style
+    # =========================================================================
+    
+    def format_short_legal(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        OSCOLA short form for legal case.
+        
+        Pattern: Short case name [pinpoint]
+        Example: Donoghue [45]
+        
+        Or just case name for subsequent references.
+        """
+        parts = []
+        
+        # Short case name (first party) in italics
+        if m.case_name:
+            case_name = m.case_name.replace(' v. ', ' v ')
+            # Get first party for short form
+            if ' v ' in case_name:
+                short_name = case_name.split(' v ')[0]
+            else:
+                short_name = case_name
+            parts.append(self.italicize(short_name))
+        
+        # Pinpoint in brackets
+        if page:
+            parts.append(f"[{page}]")
+        
+        return " ".join(parts) if parts else m.raw_source or "Unknown source"
+    
+    def format_short_journal(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        OSCOLA short form for journal article.
+        
+        Pattern: Author, 'Short Title' page
+        Example: Hart, 'Positivism' 595
+        """
+        parts = []
+        
+        # Author last name
+        if m.authors:
+            parts.append(self.get_authors_short(m.authors, max_authors=1) + ",")
+        
+        # Short title in single quotes
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            parts.append(f"'{short_title}'")
+        
+        result = " ".join(parts)
+        
+        # Add page if provided
+        if page:
+            result += f" {page}"
+        
+        return result if result else m.raw_source or "Unknown source"
+    
+    def format_short_book(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        OSCOLA short form for book.
+        
+        Pattern: Author, Short Title page
+        Example: Burrows, Restatement 45
+        """
+        parts = []
+        
+        # Author last name
+        if m.authors:
+            parts.append(self.get_authors_short(m.authors, max_authors=1) + ",")
+        
+        # Short title in italics
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            parts.append(self.italicize(short_title))
+        
+        result = " ".join(parts)
+        
+        # Add page if provided
+        if page:
+            result += f" {page}"
+        
+        return result if result else m.raw_source or "Unknown source"
+    
+    def format_short_interview(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        OSCOLA short form for interview.
+        
+        Pattern: Name interview
+        Example: Smith interview
+        """
+        if m.interviewee:
+            name_parts = m.interviewee.split()
+            last_name = name_parts[-1] if name_parts else m.interviewee
+            return f"{last_name} interview"
+        
+        return "Interview"
+    
+    def format_short_newspaper(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        OSCOLA short form for newspaper.
+        
+        Pattern: Author, 'Short Title'
+        Example: Rozenberg, 'Justice in AI'
+        """
+        parts = []
+        
+        if m.authors:
+            parts.append(self.get_authors_short(m.authors, max_authors=1) + ",")
+        
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            parts.append(f"'{short_title}'")
+        
+        return " ".join(parts) if parts else m.raw_source or "Unknown source"
+    
+    def format_short_government(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        OSCOLA short form for government document.
+        
+        Pattern: Short Title
+        Example: Mental Health Report
+        """
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            result = self.italicize(short_title)
+            if page:
+                result += f" {page}"
+            return result
+        
+        return m.raw_source or "Unknown source"
+    
+    def format_short_url(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        OSCOLA short form for web page.
+        
+        Pattern: 'Short Title'
+        """
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            return f"'{short_title}'"
+        
+        return m.url or m.raw_source or "Unknown source"
