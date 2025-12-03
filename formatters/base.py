@@ -7,7 +7,7 @@ Base citation formatter and style router.
 from abc import ABC, abstractmethod
 from typing import Optional, List
 
-from ..models import CitationMetadata, CitationType, CitationStyle
+from models import CitationMetadata, CitationType, CitationStyle
 
 
 class BaseFormatter(ABC):
@@ -230,7 +230,7 @@ def get_formatter(style) -> BaseFormatter:
             return cls()
     
     # Default to Chicago
-    from .chicago import ChicagoFormatter
+    from formatters.chicago import ChicagoFormatter
     return ChicagoFormatter()
 
 

@@ -14,8 +14,8 @@ MLA style characteristics:
 """
 
 from typing import List
-from .base import BaseFormatter, register_formatter
-from ..models import CitationMetadata, CitationType
+from formatters.base import BaseFormatter, register_formatter
+from models import CitationMetadata, CitationType
 
 
 @register_formatter('MLA')

@@ -14,8 +14,8 @@ Key characteristics:
 """
 
 from typing import List, Optional
-from .base import BaseFormatter, register_formatter
-from ..models import CitationMetadata, CitationType
+from formatters.base import BaseFormatter, register_formatter
+from models import CitationMetadata, CitationType
 
 
 # UK Court abbreviations for neutral citations

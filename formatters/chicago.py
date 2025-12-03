@@ -7,8 +7,8 @@ This is the default style for history and humanities.
 Uses <i> tags for italics (Word-compatible).
 """
 
-from .base import BaseFormatter, register_formatter
-from ..models import CitationMetadata, CitationStyle
+from formatters.base import BaseFormatter, register_formatter
+from models import CitationMetadata, CitationStyle
 
 
 @register_formatter(CitationStyle.CHICAGO)

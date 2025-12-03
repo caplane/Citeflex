@@ -8,8 +8,8 @@ Uses <i> tags for italics (Word-compatible).
 """
 
 import re
-from .base import BaseFormatter, register_formatter
-from ..models import CitationMetadata, CitationStyle
+from formatters.base import BaseFormatter, register_formatter
+from models import CitationMetadata, CitationStyle
 
 
 @register_formatter(CitationStyle.APA)
