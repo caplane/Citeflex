@@ -8,9 +8,7 @@ gunicorn>=21.0.0
 # HTTP requests for API calls
 requests>=2.31.0
 
-# Word document processing
-python-docx>=0.8.11
-lxml>=4.9.0
+# Word document processing (uses standard library: zipfile, xml.etree.ElementTree)
 
 # Environment variables
 python-dotenv>=1.0.0

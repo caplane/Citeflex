@@ -1,38 +1,29 @@
 """
 citeflex/document_processor.py
 
-Word document processing utilities.
+Word document processing using direct XML manipulation.
 
-Features:
-- LinkActivator: Adds hyperlinks to citations in Word documents
-- EndnoteProcessor: Processes and formats endnotes
-- BulkProcessor: Batch citation processing for entire documents
+Ported from the monolithic citation_manager.py to preserve:
+- Proper endnote/footnote reference elements
+- Italic formatting via <i> tags
+- Clickable hyperlinks for URLs
 
-These tools integrate with the main citation system to:
-1. Extract citations from Word documents
-2. Look them up via the search engines
-3. Format them in the desired style
-4. Optionally add hyperlinks to source URLs
+This approach extracts the docx as a zip, manipulates the XML directly,
+and repackages it - giving full control over Word's internal structure.
 """
 
+import os
 import re
-import copy
-from typing import List, Optional, Tuple, Dict, Any
+import html
+import zipfile
+import tempfile
+import shutil
+import xml.etree.ElementTree as ET
+from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 from io import BytesIO
 
-try:
-    from docx import Document
-    from docx.shared import Pt, RGBColor
-    from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
-    DOCX_AVAILABLE = True
-except ImportError:
-    DOCX_AVAILABLE = False
-    print("[document_processor] python-docx not installed, Word processing disabled")
-
-from models import CitationMetadata
-from router import get_citation, route_and_search
+from router import get_citation
 
 
 @dataclass
@@ -40,537 +31,585 @@ class ProcessedCitation:
     """Result of processing a single citation."""
     original: str
     formatted: str
-    metadata: Optional[CitationMetadata]
+    metadata: Any
     url: Optional[str]
     success: bool
     error: Optional[str] = None
 
 
-class LinkActivator:
+class WordDocumentProcessor:
     """
-    Adds hyperlinks to citations in Word documents.
+    Processes Word documents to read and write endnotes/footnotes.
+    Preserves the main document body while allowing citation fixes.
     
-    Usage:
-        activator = LinkActivator()
-        activator.load_document("input.docx")
-        activator.process_endnotes(style="Chicago Manual of Style")
-        activator.save_document("output.docx")
+    Uses direct XML manipulation for precise control over Word's structure.
     """
     
-    def __init__(self):
-        if not DOCX_AVAILABLE:
-            raise ImportError("python-docx is required for document processing")
-        self.document = None
-        self.processed_count = 0
-        self.error_count = 0
+    NS = {
+        'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+        'xml': 'http://www.w3.org/XML/1998/namespace'
+    }
     
-    def load_document(self, file_path_or_bytes) -> None:
-        """Load a Word document from file path or bytes."""
-        if isinstance(file_path_or_bytes, (str, bytes)):
-            if isinstance(file_path_or_bytes, str):
-                self.document = Document(file_path_or_bytes)
-            else:
-                self.document = Document(BytesIO(file_path_or_bytes))
+    def __init__(self, file_path_or_buffer):
+        """
+        Initialize with a file path or file-like object (BytesIO).
+        """
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_path = None
+        
+        # Handle both file paths and file-like objects
+        if hasattr(file_path_or_buffer, 'read'):
+            # It's a file-like object (e.g., from upload)
+            with zipfile.ZipFile(file_path_or_buffer, 'r') as z:
+                z.extractall(self.temp_dir)
         else:
-            # Assume it's a file-like object
-            self.document = Document(file_path_or_bytes)
+            # It's a file path
+            self.original_path = file_path_or_buffer
+            with zipfile.ZipFile(file_path_or_buffer, 'r') as z:
+                z.extractall(self.temp_dir)
     
-    def save_document(self, file_path_or_buffer) -> None:
-        """Save the document to file or buffer."""
-        if self.document:
-            self.document.save(file_path_or_buffer)
-    
-    def get_document_bytes(self) -> bytes:
-        """Get the document as bytes."""
-        if not self.document:
-            return b""
-        buffer = BytesIO()
-        self.document.save(buffer)
-        buffer.seek(0)
-        return buffer.read()
-    
-    def process_paragraphs(
-        self,
-        style: str = "Chicago Manual of Style",
-        add_links: bool = True,
-        callback: Optional[callable] = None
-    ) -> List[ProcessedCitation]:
-        """
-        Process citations in document paragraphs.
-        
-        Args:
-            style: Citation style to use
-            add_links: Whether to add hyperlinks
-            callback: Optional callback(original, formatted, success) for progress
-            
-        Returns:
-            List of ProcessedCitation results
-        """
-        if not self.document:
-            return []
-        
-        results = []
-        
-        for para in self.document.paragraphs:
-            text = para.text.strip()
-            if not text:
-                continue
-            
-            # Process each citation (split by semicolons)
-            citations = self._split_citations(text)
-            
-            for citation in citations:
-                result = self._process_single_citation(citation, style, add_links)
-                results.append(result)
-                
-                if callback:
-                    callback(result.original, result.formatted, result.success)
-        
-        return results
-    
-    def process_endnotes(
-        self,
-        style: str = "Chicago Manual of Style",
-        add_links: bool = True,
-        callback: Optional[callable] = None
-    ) -> List[ProcessedCitation]:
-        """
-        Process citations in document endnotes/footnotes.
-        
-        Note: python-docx has limited support for endnotes.
-        This method tries to access them via the XML structure.
-        
-        Args:
-            style: Citation style to use
-            add_links: Whether to add hyperlinks
-            callback: Optional callback for progress
-            
-        Returns:
-            List of ProcessedCitation results
-        """
-        if not self.document:
-            return []
-        
-        results = []
-        
-        # Try to access endnotes via document parts
-        try:
-            # Get endnotes part if it exists
-            endnotes_part = None
-            for rel in self.document.part.rels.values():
-                if "endnotes" in rel.reltype:
-                    endnotes_part = rel.target_part
-                    break
-            
-            if endnotes_part:
-                # Parse endnotes XML
-                from lxml import etree
-                root = etree.fromstring(endnotes_part.blob)
-                
-                # Find all endnote elements
-                nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-                for endnote in root.findall('.//w:endnote', nsmap):
-                    # Skip separator endnotes
-                    endnote_type = endnote.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type')
-                    if endnote_type in ['separator', 'continuationSeparator']:
-                        continue
-                    
-                    # Get text content
-                    text_parts = []
-                    for t in endnote.findall('.//w:t', nsmap):
-                        if t.text:
-                            text_parts.append(t.text)
-                    
-                    text = ''.join(text_parts).strip()
-                    if text:
-                        result = self._process_single_citation(text, style, add_links)
-                        results.append(result)
-                        
-                        if callback:
-                            callback(result.original, result.formatted, result.success)
-        
-        except Exception as e:
-            print(f"[LinkActivator] Error processing endnotes: {e}")
-            # Fall back to paragraph processing
-            return self.process_paragraphs(style, add_links, callback)
-        
-        return results
-    
-    def _split_citations(self, text: str) -> List[str]:
-        """Split text into individual citations."""
-        # Split by semicolons (common in endnotes)
-        if ';' in text:
-            return [c.strip() for c in text.split(';') if c.strip()]
-        return [text] if text else []
-    
-    def _process_single_citation(
-        self,
-        citation: str,
-        style: str,
-        add_links: bool
-    ) -> ProcessedCitation:
-        """Process a single citation string."""
-        try:
-            metadata, formatted = get_citation(citation, style)
-            
-            if metadata:
-                self.processed_count += 1
-                return ProcessedCitation(
-                    original=citation,
-                    formatted=formatted,
-                    metadata=metadata,
-                    url=metadata.url if metadata else None,
-                    success=True
-                )
-            else:
-                self.error_count += 1
-                return ProcessedCitation(
-                    original=citation,
-                    formatted=citation,  # Keep original
-                    metadata=None,
-                    url=None,
-                    success=False,
-                    error="No metadata found"
-                )
-        
-        except Exception as e:
-            self.error_count += 1
-            return ProcessedCitation(
-                original=citation,
-                formatted=citation,
-                metadata=None,
-                url=None,
-                success=False,
-                error=str(e)
-            )
-    
-    def add_hyperlink(self, paragraph, text: str, url: str) -> None:
-        """
-        Add a hyperlink to a paragraph.
-        
-        Args:
-            paragraph: The docx paragraph object
-            text: The text to display
-            url: The URL to link to
-        """
-        if not url:
-            return
-        
-        # Create relationship
-        part = paragraph.part
-        r_id = part.relate_to(url, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink", is_external=True)
-        
-        # Create hyperlink element
-        hyperlink = OxmlElement('w:hyperlink')
-        hyperlink.set(qn('r:id'), r_id)
-        
-        # Create run with text
-        new_run = OxmlElement('w:r')
-        rPr = OxmlElement('w:rPr')
-        
-        # Blue color and underline for link
-        color = OxmlElement('w:color')
-        color.set(qn('w:val'), '0000FF')
-        rPr.append(color)
-        
-        u = OxmlElement('w:u')
-        u.set(qn('w:val'), 'single')
-        rPr.append(u)
-        
-        new_run.append(rPr)
-        
-        t = OxmlElement('w:t')
-        t.text = text
-        new_run.append(t)
-        
-        hyperlink.append(new_run)
-        paragraph._p.append(hyperlink)
-
-
-class BulkProcessor:
-    """
-    Batch processor for multiple citations.
-    
-    Usage:
-        processor = BulkProcessor()
-        results = processor.process_list(citations, style="APA 7")
-    """
-    
-    def __init__(self):
-        self.processed_count = 0
-        self.error_count = 0
-    
-    def process_list(
-        self,
-        citations: List[str],
-        style: str = "Chicago Manual of Style",
-        callback: Optional[callable] = None
-    ) -> List[ProcessedCitation]:
-        """
-        Process a list of citations.
-        
-        Args:
-            citations: List of citation strings
-            style: Citation style to use
-            callback: Optional callback(index, total, result) for progress
-            
-        Returns:
-            List of ProcessedCitation results
-        """
-        results = []
-        total = len(citations)
-        
-        for i, citation in enumerate(citations):
-            result = self._process_single(citation, style)
-            results.append(result)
-            
-            if callback:
-                callback(i + 1, total, result)
-        
-        return results
-    
-    def process_document(
-        self,
-        doc_bytes: bytes,
-        style: str = "Chicago Manual of Style",
-        extract_from: str = "paragraphs"  # or "endnotes"
-    ) -> Tuple[bytes, List[ProcessedCitation]]:
-        """
-        Process a Word document and return updated document with results.
-        
-        Args:
-            doc_bytes: The document as bytes
-            style: Citation style to use
-            extract_from: Where to extract citations ("paragraphs" or "endnotes")
-            
-        Returns:
-            Tuple of (processed_document_bytes, results)
-        """
-        if not DOCX_AVAILABLE:
-            raise ImportError("python-docx is required")
-        
-        activator = LinkActivator()
-        activator.load_document(doc_bytes)
-        
-        if extract_from == "endnotes":
-            results = activator.process_endnotes(style, add_links=True)
-        else:
-            results = activator.process_paragraphs(style, add_links=True)
-        
-        return activator.get_document_bytes(), results
-    
-    def _process_single(self, citation: str, style: str) -> ProcessedCitation:
-        """Process a single citation."""
-        try:
-            metadata, formatted = get_citation(citation, style)
-            
-            if metadata:
-                self.processed_count += 1
-                return ProcessedCitation(
-                    original=citation,
-                    formatted=formatted,
-                    metadata=metadata,
-                    url=metadata.url if metadata else None,
-                    success=True
-                )
-            else:
-                self.error_count += 1
-                return ProcessedCitation(
-                    original=citation,
-                    formatted=citation,
-                    metadata=None,
-                    url=None,
-                    success=False,
-                    error="No metadata found"
-                )
-        
-        except Exception as e:
-            self.error_count += 1
-            return ProcessedCitation(
-                original=citation,
-                formatted=citation,
-                metadata=None,
-                url=None,
-                success=False,
-                error=str(e)
-            )
-    
-    def generate_report(self, results: List[ProcessedCitation]) -> str:
-        """
-        Generate a summary report of processing results.
-        
-        Args:
-            results: List of ProcessedCitation objects
-            
-        Returns:
-            Formatted report string
-        """
-        total = len(results)
-        success = sum(1 for r in results if r.success)
-        failed = total - success
-        
-        lines = [
-            "=" * 60,
-            "CITATION PROCESSING REPORT",
-            "=" * 60,
-            f"Total citations: {total}",
-            f"Successfully processed: {success}",
-            f"Failed: {failed}",
-            f"Success rate: {success/total*100:.1f}%" if total > 0 else "N/A",
-            "",
-            "-" * 60,
-            "DETAILS",
-            "-" * 60,
-        ]
-        
-        for i, result in enumerate(results, 1):
-            status = "✓" if result.success else "✗"
-            lines.append(f"\n{i}. {status} Original: {result.original[:50]}...")
-            lines.append(f"   Formatted: {result.formatted[:50]}...")
-            if result.url:
-                lines.append(f"   URL: {result.url}")
-            if result.error:
-                lines.append(f"   Error: {result.error}")
-        
-        return "\n".join(lines)
-
-
-class EndnoteEditor:
-    """
-    Edit endnotes in Word documents while preserving formatting.
-    
-    This allows for:
-    - Replacing endnote text with formatted citations
-    - Adding hyperlinks to sources
-    - Batch updating all endnotes
-    """
-    
-    def __init__(self):
-        if not DOCX_AVAILABLE:
-            raise ImportError("python-docx is required")
-        self.document = None
-    
-    def load_document(self, file_path_or_bytes) -> None:
-        """Load a Word document."""
-        if isinstance(file_path_or_bytes, (str, bytes)):
-            if isinstance(file_path_or_bytes, str):
-                self.document = Document(file_path_or_bytes)
-            else:
-                self.document = Document(BytesIO(file_path_or_bytes))
-        else:
-            self.document = Document(file_path_or_bytes)
-    
-    def get_endnotes(self) -> List[Dict[str, Any]]:
+    def get_endnotes(self) -> List[Dict[str, str]]:
         """
         Extract all endnotes from the document.
         
         Returns:
-            List of dicts with 'id', 'text', and 'element' keys
+            List of dicts: [{'id': '1', 'text': 'citation text'}, ...]
         """
-        if not self.document:
+        endnotes_path = os.path.join(self.temp_dir, 'word', 'endnotes.xml')
+        if not os.path.exists(endnotes_path):
             return []
         
-        endnotes = []
+        try:
+            tree = ET.parse(endnotes_path)
+            root = tree.getroot()
+            notes = []
+            
+            for endnote in root.findall('.//w:endnote', self.NS):
+                note_id = endnote.get(f"{{{self.NS['w']}}}id")
+                
+                # Skip system endnotes (id 0 and -1)
+                try:
+                    if int(note_id) < 1:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                
+                # Extract all text from this endnote
+                text_parts = []
+                for t in endnote.findall('.//w:t', self.NS):
+                    if t.text:
+                        text_parts.append(t.text)
+                
+                full_text = "".join(text_parts).strip()
+                if full_text:
+                    notes.append({'id': note_id, 'text': full_text})
+            
+            return notes
+            
+        except Exception as e:
+            print(f"[WordDocumentProcessor] Error reading endnotes: {e}")
+            return []
+    
+    def get_footnotes(self) -> List[Dict[str, str]]:
+        """
+        Extract all footnotes from the document.
+        
+        Returns:
+            List of dicts: [{'id': '1', 'text': 'citation text'}, ...]
+        """
+        footnotes_path = os.path.join(self.temp_dir, 'word', 'footnotes.xml')
+        if not os.path.exists(footnotes_path):
+            return []
         
         try:
-            # Access endnotes part
-            for rel in self.document.part.rels.values():
-                if "endnotes" in rel.reltype:
-                    endnotes_part = rel.target_part
-                    
-                    from lxml import etree
-                    root = etree.fromstring(endnotes_part.blob)
-                    
-                    nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-                    for endnote in root.findall('.//w:endnote', nsmap):
-                        endnote_type = endnote.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type')
-                        if endnote_type in ['separator', 'continuationSeparator']:
-                            continue
-                        
-                        endnote_id = endnote.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}id')
-                        
-                        text_parts = []
-                        for t in endnote.findall('.//w:t', nsmap):
-                            if t.text:
-                                text_parts.append(t.text)
-                        
-                        endnotes.append({
-                            'id': endnote_id,
-                            'text': ''.join(text_parts).strip(),
-                            'element': endnote
-                        })
-                    
-                    break
-        
+            tree = ET.parse(footnotes_path)
+            root = tree.getroot()
+            notes = []
+            
+            for footnote in root.findall('.//w:footnote', self.NS):
+                note_id = footnote.get(f"{{{self.NS['w']}}}id")
+                
+                # Skip system footnotes (id 0 and -1)
+                try:
+                    if int(note_id) < 1:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                
+                # Extract all text
+                text_parts = []
+                for t in footnote.findall('.//w:t', self.NS):
+                    if t.text:
+                        text_parts.append(t.text)
+                
+                full_text = "".join(text_parts).strip()
+                if full_text:
+                    notes.append({'id': note_id, 'text': full_text})
+            
+            return notes
+            
         except Exception as e:
-            print(f"[EndnoteEditor] Error reading endnotes: {e}")
-        
-        return endnotes
+            print(f"[WordDocumentProcessor] Error reading footnotes: {e}")
+            return []
     
-    def update_endnote(self, endnote_id: str, new_text: str) -> bool:
+    def write_endnote(self, note_id: str, new_content: str) -> bool:
         """
-        Update the text of an endnote.
+        Replace an endnote's content with new formatted citation.
+        Handles <i> tags for italics using regex (no BeautifulSoup needed).
+        PRESERVES the endnoteRef element for proper numbering and linking.
         
         Args:
-            endnote_id: The endnote ID
-            new_text: The new text content
+            note_id: The endnote ID to update
+            new_content: New citation text (may contain <i> tags for italics)
             
         Returns:
-            True if successful
+            bool: True if successful
         """
-        # This would require direct XML manipulation
-        # For now, return False as full implementation needs more work
-        print(f"[EndnoteEditor] update_endnote not fully implemented")
-        return False
+        endnotes_path = os.path.join(self.temp_dir, 'word', 'endnotes.xml')
+        if not os.path.exists(endnotes_path):
+            return False
+        
+        try:
+            # Register namespace to preserve it
+            ET.register_namespace('w', self.NS['w'])
+            ET.register_namespace('xml', self.NS['xml'])
+            
+            tree = ET.parse(endnotes_path)
+            root = tree.getroot()
+            
+            # Find the target endnote
+            target = None
+            for endnote in root.findall('.//w:endnote', self.NS):
+                if endnote.get(f"{{{self.NS['w']}}}id") == str(note_id):
+                    target = endnote
+                    break
+            
+            if target is None:
+                return False
+            
+            # Find or create paragraph
+            para = target.find('.//w:p', self.NS)
+            if para is None:
+                para = ET.SubElement(target, f"{{{self.NS['w']}}}p")
+            else:
+                # FIXED: Preserve paragraph properties AND endnoteRef run
+                preserved_pPr = None
+                preserved_endnoteRef_run = None
+                
+                for child in list(para):
+                    tag = child.tag.replace(f"{{{self.NS['w']}}}", "")
+                    
+                    # Preserve paragraph properties
+                    if tag == 'pPr':
+                        preserved_pPr = child
+                        continue
+                    
+                    # Check if this run contains endnoteRef
+                    if tag == 'r':
+                        endnote_ref = child.find(f".//{{{self.NS['w']}}}endnoteRef")
+                        if endnote_ref is not None:
+                            preserved_endnoteRef_run = child
+                            continue
+                    
+                    # Remove all other children
+                    para.remove(child)
+                
+                # If no endnoteRef run was found, create one
+                if preserved_endnoteRef_run is None:
+                    ref_run = ET.Element(f"{{{self.NS['w']}}}r")
+                    rPr = ET.SubElement(ref_run, f"{{{self.NS['w']}}}rPr")
+                    rStyle = ET.SubElement(rPr, f"{{{self.NS['w']}}}rStyle")
+                    rStyle.set(f"{{{self.NS['w']}}}val", "EndnoteReference")
+                    ET.SubElement(ref_run, f"{{{self.NS['w']}}}endnoteRef")
+                    
+                    # Insert after pPr if it exists, otherwise at beginning
+                    if preserved_pPr is not None:
+                        idx = list(para).index(preserved_pPr) + 1
+                        para.insert(idx, ref_run)
+                    else:
+                        para.insert(0, ref_run)
+            
+            # Parse content using regex to handle <i> tags (no BeautifulSoup)
+            parts = re.split(r'(<i>.*?</i>)', html.unescape(new_content))
+            
+            for part in parts:
+                if not part:
+                    continue
+                    
+                run = ET.SubElement(para, f"{{{self.NS['w']}}}r")
+                
+                # Check if this is italic text
+                italic_match = re.match(r'<i>(.*?)</i>', part)
+                if italic_match:
+                    rPr = ET.SubElement(run, f"{{{self.NS['w']}}}rPr")
+                    ET.SubElement(rPr, f"{{{self.NS['w']}}}i")
+                    text_content = italic_match.group(1)
+                else:
+                    text_content = part
+                
+                t = ET.SubElement(run, f"{{{self.NS['w']}}}t")
+                t.text = text_content
+                t.set(f"{{{self.NS['xml']}}}space", "preserve")
+            
+            tree.write(endnotes_path, encoding='UTF-8', xml_declaration=True)
+            return True
+            
+        except Exception as e:
+            print(f"[WordDocumentProcessor] Error writing endnote: {e}")
+            return False
     
-    def save_document(self, file_path_or_buffer) -> None:
-        """Save the document."""
-        if self.document:
-            self.document.save(file_path_or_buffer)
+    def write_footnote(self, note_id: str, new_content: str) -> bool:
+        """
+        Replace a footnote's content with new formatted citation.
+        Handles <i> tags for italics using regex (no BeautifulSoup needed).
+        PRESERVES the footnoteRef element for proper numbering and linking.
+        """
+        footnotes_path = os.path.join(self.temp_dir, 'word', 'footnotes.xml')
+        if not os.path.exists(footnotes_path):
+            return False
+        
+        try:
+            ET.register_namespace('w', self.NS['w'])
+            ET.register_namespace('xml', self.NS['xml'])
+            
+            tree = ET.parse(footnotes_path)
+            root = tree.getroot()
+            
+            target = None
+            for footnote in root.findall('.//w:footnote', self.NS):
+                if footnote.get(f"{{{self.NS['w']}}}id") == str(note_id):
+                    target = footnote
+                    break
+            
+            if target is None:
+                return False
+            
+            para = target.find('.//w:p', self.NS)
+            if para is None:
+                para = ET.SubElement(target, f"{{{self.NS['w']}}}p")
+            else:
+                # FIXED: Preserve paragraph properties AND footnoteRef run
+                preserved_pPr = None
+                preserved_footnoteRef_run = None
+                
+                for child in list(para):
+                    tag = child.tag.replace(f"{{{self.NS['w']}}}", "")
+                    
+                    # Preserve paragraph properties
+                    if tag == 'pPr':
+                        preserved_pPr = child
+                        continue
+                    
+                    # Check if this run contains footnoteRef
+                    if tag == 'r':
+                        footnote_ref = child.find(f".//{{{self.NS['w']}}}footnoteRef")
+                        if footnote_ref is not None:
+                            preserved_footnoteRef_run = child
+                            continue
+                    
+                    # Remove all other children
+                    para.remove(child)
+                
+                # If no footnoteRef run was found, create one
+                if preserved_footnoteRef_run is None:
+                    ref_run = ET.Element(f"{{{self.NS['w']}}}r")
+                    rPr = ET.SubElement(ref_run, f"{{{self.NS['w']}}}rPr")
+                    rStyle = ET.SubElement(rPr, f"{{{self.NS['w']}}}rStyle")
+                    rStyle.set(f"{{{self.NS['w']}}}val", "FootnoteReference")
+                    ET.SubElement(ref_run, f"{{{self.NS['w']}}}footnoteRef")
+                    
+                    # Insert after pPr if it exists, otherwise at beginning
+                    if preserved_pPr is not None:
+                        idx = list(para).index(preserved_pPr) + 1
+                        para.insert(idx, ref_run)
+                    else:
+                        para.insert(0, ref_run)
+            
+            # Parse content using regex to handle <i> tags
+            parts = re.split(r'(<i>.*?</i>)', html.unescape(new_content))
+            
+            for part in parts:
+                if not part:
+                    continue
+                    
+                run = ET.SubElement(para, f"{{{self.NS['w']}}}r")
+                
+                # Check if this is italic text
+                italic_match = re.match(r'<i>(.*?)</i>', part)
+                if italic_match:
+                    rPr = ET.SubElement(run, f"{{{self.NS['w']}}}rPr")
+                    ET.SubElement(rPr, f"{{{self.NS['w']}}}i")
+                    text_content = italic_match.group(1)
+                else:
+                    text_content = part
+                
+                t = ET.SubElement(run, f"{{{self.NS['w']}}}t")
+                t.text = text_content
+                t.set(f"{{{self.NS['xml']}}}space", "preserve")
+            
+            tree.write(footnotes_path, encoding='UTF-8', xml_declaration=True)
+            return True
+            
+        except Exception as e:
+            print(f"[WordDocumentProcessor] Error writing footnote: {e}")
+            return False
+    
+    def save_to_buffer(self) -> BytesIO:
+        """
+        Save the modified document to a BytesIO buffer.
+        
+        Returns:
+            BytesIO buffer containing the .docx file
+        """
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk(self.temp_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, self.temp_dir)
+                    zipf.write(file_path, arcname)
+        buffer.seek(0)
+        return buffer
+    
+    def save_as(self, output_path: str) -> None:
+        """
+        Save the modified document to a new file.
+        
+        Args:
+            output_path: Path for the output .docx file
+        """
+        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk(self.temp_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, self.temp_dir)
+                    zipf.write(file_path, arcname)
+    
+    def cleanup(self) -> None:
+        """Remove temporary files."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+    
+    def __del__(self):
+        """Cleanup on deletion."""
+        try:
+            self.cleanup()
+        except:
+            pass
 
 
-# Convenience functions
+class LinkActivator:
+    """
+    Post-processing module that converts plain text URLs in Word documents
+    into clickable hyperlinks. Processes document.xml, endnotes.xml, and footnotes.xml.
+    """
+    
+    @staticmethod
+    def process(docx_buffer: BytesIO) -> BytesIO:
+        """
+        Process a docx buffer to make all URLs clickable.
+        
+        Args:
+            docx_buffer: BytesIO containing the .docx file
+            
+        Returns:
+            BytesIO containing the processed .docx file
+        """
+        temp_dir = tempfile.mkdtemp()
+        
+        try:
+            # Extract docx
+            docx_buffer.seek(0)
+            with zipfile.ZipFile(docx_buffer, 'r') as zip_ref:
+                zip_ref.extractall(temp_dir)
+
+            target_files = ['word/document.xml', 'word/endnotes.xml', 'word/footnotes.xml']
+            
+            for xml_file in target_files:
+                full_path = os.path.join(temp_dir, xml_file)
+                if not os.path.exists(full_path):
+                    continue
+
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                def linkify_text_node(match):
+                    text_content = match.group(2) 
+                    url_match = re.search(r'(https?://[^\s<>"]+)', text_content)
+                    
+                    if url_match:
+                        url = url_match.group(1)
+                        clean_url = url.rstrip('.,;)')
+                        trailing_punct = url[len(clean_url):]
+                        safe_url = html.escape(clean_url)
+                        
+                        parts = text_content.split(url, 1)
+                        pre = parts[0]
+                        post = parts[1] if len(parts) > 1 else ""
+                        
+                        fld_begin = r'<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+                        instr = f'<w:r><w:instrText xml:space="preserve"> HYPERLINK "{safe_url}" </w:instrText></w:r>'
+                        fld_sep = r'<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+                        display = (
+                            f'<w:r>'
+                            f'<w:rPr><w:color w:val="0000FF"/><w:u w:val="single"/></w:rPr>'
+                            f'<w:t>{clean_url}</w:t>'
+                            f'</w:r>'
+                        )
+                        fld_end = r'<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+                        
+                        full_field_xml = f"{fld_begin}{instr}{fld_sep}{display}{fld_end}"
+                        new_xml = f"{pre}</w:t></w:r>{full_field_xml}<w:r><w:t>{trailing_punct}{post}"
+                        return f"{match.group(1)}{new_xml}{match.group(3)}"
+                        
+                    return match.group(0)
+
+                run_pattern = r'(<w:r[^\>]*>)(.*?<w:t[^>]*>.*?<\/w:t>.*?)(<\/w:r>)'
+                
+                def process_run(run_match):
+                    run_inner = run_match.group(2)
+                    if 'HYPERLINK' in run_inner or 'w:instrText' in run_inner:
+                        return run_match.group(0)
+                    return re.sub(r'(<w:t[^>]*>)(.*?)(</w:t>)', linkify_text_node, run_match.group(0))
+
+                new_content = re.sub(run_pattern, process_run, content, flags=re.DOTALL)
+                
+                if new_content != content:
+                    with open(full_path, 'w', encoding='utf-8') as f:
+                        f.write(new_content)
+
+            # Repackage as docx
+            output_buffer = BytesIO()
+            with zipfile.ZipFile(output_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for root, dirs, files in os.walk(temp_dir):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, temp_dir)
+                        zipf.write(file_path, arcname)
+            
+            output_buffer.seek(0)
+            return output_buffer
+
+        except Exception as e:
+            print(f"[LinkActivator] Error: {e}")
+            docx_buffer.seek(0)
+            return docx_buffer
+            
+        finally:
+            shutil.rmtree(temp_dir)
+
 
 def process_document(
-    doc_path_or_bytes,
+    file_bytes: bytes,
     style: str = "Chicago Manual of Style",
-    output_path: Optional[str] = None
-) -> List[ProcessedCitation]:
+    add_links: bool = True
+) -> tuple:
     """
     Process all citations in a Word document.
     
     Args:
-        doc_path_or_bytes: Path to document or document bytes
+        file_bytes: The document as bytes
         style: Citation style to use
-        output_path: Optional path to save processed document
+        add_links: Whether to make URLs clickable
         
     Returns:
-        List of ProcessedCitation results
+        Tuple of (processed_document_bytes, results_list)
     """
-    activator = LinkActivator()
-    activator.load_document(doc_path_or_bytes)
+    results = []
     
-    results = activator.process_paragraphs(style, add_links=True)
+    # Load document
+    processor = WordDocumentProcessor(BytesIO(file_bytes))
     
-    if output_path:
-        activator.save_document(output_path)
+    # Get all endnotes and footnotes
+    endnotes = processor.get_endnotes()
+    footnotes = processor.get_footnotes()
     
-    return results
-
-
-def process_citations(
-    citations: List[str],
-    style: str = "Chicago Manual of Style"
-) -> List[ProcessedCitation]:
-    """
-    Process a list of citation strings.
-    
-    Args:
-        citations: List of citation strings
-        style: Citation style to use
+    # Process endnotes
+    for note in endnotes:
+        note_id = note['id']
+        original_text = note['text']
         
-    Returns:
-        List of ProcessedCitation results
-    """
-    processor = BulkProcessor()
-    return processor.process_list(citations, style)
+        try:
+            metadata, formatted = get_citation(original_text, style)
+            
+            if metadata and formatted:
+                # Write the formatted citation back
+                processor.write_endnote(note_id, formatted)
+                
+                results.append(ProcessedCitation(
+                    original=original_text,
+                    formatted=formatted,
+                    metadata=metadata,
+                    url=metadata.url if hasattr(metadata, 'url') else None,
+                    success=True
+                ))
+            else:
+                results.append(ProcessedCitation(
+                    original=original_text,
+                    formatted=original_text,
+                    metadata=None,
+                    url=None,
+                    success=False,
+                    error="No metadata found"
+                ))
+        except Exception as e:
+            print(f"[process_document] Error processing endnote {note_id}: {e}")
+            results.append(ProcessedCitation(
+                original=original_text,
+                formatted=original_text,
+                metadata=None,
+                url=None,
+                success=False,
+                error=str(e)
+            ))
+    
+    # Process footnotes
+    for note in footnotes:
+        note_id = note['id']
+        original_text = note['text']
+        
+        try:
+            metadata, formatted = get_citation(original_text, style)
+            
+            if metadata and formatted:
+                # Write the formatted citation back
+                processor.write_footnote(note_id, formatted)
+                
+                results.append(ProcessedCitation(
+                    original=original_text,
+                    formatted=formatted,
+                    metadata=metadata,
+                    url=metadata.url if hasattr(metadata, 'url') else None,
+                    success=True
+                ))
+            else:
+                results.append(ProcessedCitation(
+                    original=original_text,
+                    formatted=original_text,
+                    metadata=None,
+                    url=None,
+                    success=False,
+                    error="No metadata found"
+                ))
+        except Exception as e:
+            print(f"[process_document] Error processing footnote {note_id}: {e}")
+            results.append(ProcessedCitation(
+                original=original_text,
+                formatted=original_text,
+                metadata=None,
+                url=None,
+                success=False,
+                error=str(e)
+            ))
+    
+    # Save to buffer
+    doc_buffer = processor.save_to_buffer()
+    
+    # Make URLs clickable if requested
+    if add_links:
+        doc_buffer = LinkActivator.process(doc_buffer)
+    
+    # Cleanup
+    processor.cleanup()
+    
+    return doc_buffer.read(), results

@@ -112,24 +112,14 @@ def cite_document():
         }
         full_style = style_map.get(style, style)
         
-        # Process the document
-        from document_processor import LinkActivator, DOCX_AVAILABLE
-        
-        if not DOCX_AVAILABLE:
-            return jsonify({
-                'success': False,
-                'error': 'Document processing not available (python-docx not installed)'
-            }), 500
+        # Process the document using the new processor
+        from document_processor import process_document
         
         # Read file bytes
         file_bytes = file.read()
         
-        # Create processor and load document
-        activator = LinkActivator()
-        activator.load_document(file_bytes)
-        
-        # Process endnotes (where citations actually are)
-        results = activator.process_endnotes(style=full_style, add_links=False)
+        # Process document (preview mode - don't need the doc back, just results)
+        _, results = process_document(file_bytes, style=full_style, add_links=False)
         
         # Format results for response
         citations = []
@@ -184,21 +174,16 @@ def download_document():
         }
         full_style = style_map.get(style, style)
         
-        from document_processor import LinkActivator, DOCX_AVAILABLE
+        from document_processor import process_document
         from io import BytesIO
         
-        if not DOCX_AVAILABLE:
-            return jsonify({'success': False, 'error': 'python-docx not installed'}), 500
-        
         file_bytes = file.read()
-        activator = LinkActivator()
-        activator.load_document(file_bytes)
-        activator.process_endnotes(style=full_style, add_links=True)
         
-        # Get the modified document
-        output = BytesIO()
-        activator.save_document(output)
-        output.seek(0)
+        # Process document (with clickable links)
+        doc_bytes, _ = process_document(file_bytes, style=full_style, add_links=True)
+        
+        # Return the modified document
+        output = BytesIO(doc_bytes)
         
         from flask import send_file
         return send_file(
