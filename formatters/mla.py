@@ -13,7 +13,7 @@ MLA style characteristics:
 - No "p." or "pp." for page numbers
 """
 
-from typing import List
+from typing import List, Optional
 from formatters.base import BaseFormatter, register_formatter
 from models import CitationMetadata, CitationType
 
@@ -155,7 +155,7 @@ class MLAFormatter(BaseFormatter):
             if metadata.court:
                 court_year.append(metadata.court)
             if metadata.year:
-                court_year.append(metadata.year)
+                court_year.append(str(metadata.year))
             parts.append(f"({' '.join(court_year)}).")
         else:
             # Add period to last part
@@ -291,3 +291,138 @@ class MLAFormatter(BaseFormatter):
             parts.append(metadata.url + ".")
         
         return " ".join(parts)
+    
+    # =========================================================================
+    # SHORT FORM METHODS - MLA style
+    # =========================================================================
+    
+    def format_short_journal(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        MLA short form for journal article.
+        
+        Pattern: Author page
+        Example: Watson and Crick 737
+        
+        MLA uses parenthetical citations with author and page only.
+        """
+        parts = []
+        
+        # Author last name(s)
+        if m.authors:
+            parts.append(self.get_authors_short(m.authors, max_authors=2))
+        
+        # Page (no "p." in MLA)
+        if page:
+            parts.append(page)
+        
+        return " ".join(parts) + "." if parts else m.raw_source or "Unknown source"
+    
+    def format_short_book(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        MLA short form for book.
+        
+        Pattern: Author page
+        Example: Klerman 45
+        """
+        parts = []
+        
+        # Author last name(s)
+        if m.authors:
+            parts.append(self.get_authors_short(m.authors, max_authors=2))
+        
+        # Page (no "p." in MLA)
+        if page:
+            parts.append(page)
+        
+        return " ".join(parts) + "." if parts else m.raw_source or "Unknown source"
+    
+    def format_short_legal(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        MLA short form for legal case.
+        
+        Pattern: Case Name page
+        Example: Roe v. Wade 153
+        """
+        parts = []
+        
+        # Case name in italics
+        if m.case_name:
+            parts.append(self.italicize(m.case_name))
+        
+        # Page
+        if page:
+            parts.append(page)
+        
+        return " ".join(parts) + "." if parts else m.raw_source or "Unknown source"
+    
+    def format_short_interview(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        MLA short form for interview.
+        
+        Pattern: Interviewee
+        Example: Smith
+        """
+        if m.interviewee:
+            name_parts = m.interviewee.split()
+            last_name = name_parts[-1] if name_parts else m.interviewee
+            return f"{last_name}."
+        
+        return "Interview."
+    
+    def format_short_newspaper(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        MLA short form for newspaper.
+        
+        Pattern: Author
+        Example: Smith
+        """
+        if m.authors:
+            return self.get_authors_short(m.authors, max_authors=1) + "."
+        
+        # If no author, use short title
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            return f'"{short_title}."'
+        
+        return m.raw_source or "Unknown source"
+    
+    def format_short_government(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        MLA short form for government document.
+        
+        Pattern: Agency or Short Title page
+        Example: NIH 15
+        """
+        parts = []
+        
+        # Use agency if available, otherwise short title
+        if m.agency:
+            # Try to create abbreviation for long agency names
+            agency = m.agency
+            if len(agency.split()) > 3:
+                words = agency.split()
+                acronym = ''.join(w[0].upper() for w in words if w[0].isupper() or w[0].isalpha())
+                if len(acronym) >= 2:
+                    agency = acronym
+            parts.append(agency)
+        else:
+            short_title = self._get_short_title(m.title)
+            if short_title:
+                parts.append(self.italicize(short_title))
+        
+        if page:
+            parts.append(page)
+        
+        return " ".join(parts) + "." if parts else m.raw_source or "Unknown source"
+    
+    def format_short_url(self, m: CitationMetadata, page: Optional[str] = None) -> str:
+        """
+        MLA short form for web page.
+        
+        Pattern: "Short Title"
+        """
+        short_title = self._get_short_title(m.title)
+        if short_title:
+            return f'"{short_title}."'
+        
+        return m.url or m.raw_source or "Unknown source"
