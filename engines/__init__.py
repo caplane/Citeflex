@@ -22,6 +22,12 @@ from engines.google_cse import (
     GoogleBooksEngine,
     OpenLibraryEngine,
 )
+from engines.doi import (
+    extract_doi_from_url,
+    is_academic_publisher_url,
+    fetch_crossref_by_doi,
+    ACADEMIC_PUBLISHER_DOMAINS,
+)
 
 __all__ = [
     # Base
@@ -41,4 +47,9 @@ __all__ = [
     'GoogleCSEEngine',
     'GoogleBooksEngine',
     'OpenLibraryEngine',
+    # DOI
+    'extract_doi_from_url',
+    'is_academic_publisher_url',
+    'fetch_crossref_by_doi',
+    'ACADEMIC_PUBLISHER_DOMAINS',
 ]
