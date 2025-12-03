@@ -204,6 +204,12 @@ def search_all_sources(query: str, max_results: int = 5) -> List[CitationMetadat
             if result and result.has_minimum_data():
                 return [result]
     
+    # Government fast-path: .gov URLs go directly to government extractor
+    if '.gov' in query.lower():
+        result = extract_by_type(query, CitationType.GOVERNMENT)
+        if result and result.has_minimum_data():
+            return [result]
+    
     # Gemini enhancement: improve query for better search results
     detection = detect_type(query)
     enhanced = gemini_enhance(query, detection.citation_type)
