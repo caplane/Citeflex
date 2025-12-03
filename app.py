@@ -254,12 +254,14 @@ def update():
     """
     Update a specific note with new text.
     Records full citations to history for ibid/short form tracking.
+    Returns short_form for future repeat citations.
     """
     try:
         data = request.get_json()
         note_id = data.get('id')
         new_html = data.get('html', '')
         metadata_dict = data.get('metadata')  # Optional metadata for history
+        style = data.get('style', 'chicago')  # Style for short form generation
         
         if not note_id:
             return jsonify({'success': False, 'error': 'No note ID provided'}), 400
@@ -267,17 +269,23 @@ def update():
         session_data = get_session_data()
         session_data['updates'][note_id] = new_html
         
-        # Record to citation history (for ibid/short form detection)
-        # Only record full citations, not ibid or short forms
+        # Generate short_form if metadata provided
+        short_form = None
         if metadata_dict and not is_ibid(new_html):
+            meta = CitationMetadata.from_dict(metadata_dict)
+            
+            # Get formatter and generate short form
+            formatter = get_formatter(style)
+            short_form = formatter.format_short(meta)
+            
+            # Record to citation history
             history = session_data.get('citation_history')
             if history:
-                meta = CitationMetadata.from_dict(metadata_dict)
                 history.add(meta, new_html)
         
         print(f"[Update] Note {note_id} → {new_html[:50]}...")
         
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'short_form': short_form})
     
     except Exception as e:
         import traceback
